@@ -1,0 +1,13 @@
+{
+	"folders": [
+		{
+			"name": "esp32keypad",
+			"path": "C:/Users/Snowhazee1/Documents/PlatformIO/Projects/esp32keypad"
+		},
+		{
+			"name": "embedded",
+			"path": "../.."
+		}
+	],
+	"settings": {}
+}
