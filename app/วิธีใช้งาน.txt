@@ -1,0 +1,135 @@
+คู่มือใช้งาน ESP32-S3 Keypad
+=============================
+
+ไฟล์นี้อธิบายว่าโปรแกรมแต่ละตัวทำอะไร และวิธีเปิดใช้งานบน Windows
+
+
+1. ไฟล์ในโฟลเดอร์ app
+---------------------
+
+Start-KeypadConfigurator.cmd
+  เปิดโปรแกรมตั้งค่า keypad
+  - ค้นหา COM port และพยายามเชื่อมต่อกับ keypad อัตโนมัติ
+  - ตั้งปุ่ม K1, K2, K3 และเลือก profile
+  - ตั้งค่าปุ่มกดแกน knob แล้วกด Save to keypad
+  - โปรไฟล์บันทึกลงหน่วยความจำของ ESP32
+  - เฟิร์มแวร์ปัจจุบันปิดการทำงานตอนหมุน knob; ปุ่มกด SW ใช้ส่งปุ่ม Windows
+
+Start-KnobMacro.cmd
+  เปิดโปรแกรม macro สำหรับปุ่มกด SW ของ knob
+  - เลือก COM port ของ keypad แล้วกด Connect
+  - เมื่อโปรแกรมได้รับ BUTTON|ENC_SW(GPIO8)=PRESSED จะส่งปุ่ม Windows ให้คอม
+  - กด Test key เพื่อทดสอบส่งปุ่ม Windows โดยไม่ต้องกด knob
+  - เอาเครื่องหมายถูกออกจาก "Knob press sends Windows key" เพื่อปิด macro ชั่วคราว
+  - โปรแกรมนี้ใช้ COM port รับข้อความจาก keypad โดยตรง ไม่ต้องพึ่ง Native USB HID
+
+KeypadConfigurator.ps1 และ KnobMacro.ps1
+  เป็นสคริปต์ที่โปรแกรมข้างต้นเรียกใช้ ปกติให้เปิดไฟล์ .cmd แทนการเปิด .ps1 โดยตรง
+
+ESP32-Keypad-Guide.pptx
+  สไลด์คู่มือภาพรวมและการแก้ปัญหา
+
+
+2. ใช้ปุ่ม knob เป็น Windows macro
+----------------------------------
+
+1) เสียบ keypad ด้วยสาย USB ที่ส่งข้อมูลได้ และตรวจสอบหมายเลข COM port ใน Device Manager
+2) ปิด PlatformIO Serial Monitor และปิด Configurator ถ้าเปิดอยู่
+   โปรแกรมอื่นที่เปิด COM port เดียวกันจะทำให้ Knob Macro เชื่อมต่อไม่ได้
+3) ดับเบิลคลิก Start-KnobMacro.cmd
+4) เลือก COM port ของ keypad แล้วกด Connect
+5) กด Test key เพื่อทดสอบว่าเมนู Start เปิด/ปิดได้
+6) กดสวิตช์ที่แกน knob เพื่อทดสอบ macro
+7) เมื่อใช้เสร็จ กด Disconnect แล้วปิดหน้าต่างโปรแกรม
+
+ในโหมดนี้การกดสวิตช์ knob จะสั่งปุ่ม Windows ผ่านโปรแกรมบนคอม
+การหมุน knob ถูกปิดไว้ในเฟิร์มแวร์ปัจจุบัน
+
+
+3. ใช้ Configurator ตั้งค่า keypad
+----------------------------------
+
+1) ปิด Knob Macro และ Serial Monitor ก่อน เพื่อปล่อย COM port
+2) ดับเบิลคลิก Start-KeypadConfigurator.cmd
+3) รอให้โปรแกรมค้นหา keypad; ถ้าไม่พบให้กด Refresh แล้วเลือก COM port
+   ที่ปรากฏเมื่อเสียบ ESP32 ใน Device Manager จากนั้นกด Connect
+   ต้องเห็น "Connected to COMx" ก่อน ปุ่ม Save จึงจะใช้งานได้
+4) เลือก Profile 1, 2 หรือ 3
+5) เลือกปุ่มของ K1/K2/K3 และค่าของ Encoder press ตามต้องการ
+   รายการปุ่มมีแบบง่าย ๆ: None, A-Z, 0-9 และ Space
+   ช่อง Encoder press มี Windows key เพิ่มให้เลือก
+6) กด Save to keypad เพื่อบันทึกค่าที่เลือก แล้วรอข้อความ
+   "Settings saved to COMx"
+7) กด Reset profile หากต้องการคืนค่าเฉพาะโปรไฟล์ที่เลือกเป็น K1=Z, K2=X,
+   K3=Y และ Encoder press=Windows key; ยืนยันหน้าต่างก่อนรีเซ็ต
+
+การตั้งค่าจาก Configurator มีผลกับโปรไฟล์บนบอร์ด ส่วน Knob Macro
+ฟัง event จาก COM port แล้วส่งปุ่ม Windows ให้ Windows โดยตรง
+
+
+4. Build และ Upload เฟิร์มแวร์
+------------------------------
+
+ต้องใช้ Visual Studio Code ที่ติดตั้ง PlatformIO แล้ว
+
+วิธีผ่านเมนู:
+1) เปิดโฟลเดอร์หลักของโปรเจกต์ใน VS Code
+2) ปิด Serial Monitor
+3) เปิด Command Palette ด้วย Ctrl+Shift+P
+4) เลือก "PlatformIO: Build" เพื่อตรวจและสร้างเฟิร์มแวร์
+5) เลือก "PlatformIO: Upload" เพื่ออัปโหลดลงบอร์ด
+
+วิธีผ่าน PowerShell ในโฟลเดอร์โปรเจกต์:
+
+  & 'C:\Users\Snowhazee1\.platformio\penv\Scripts\platformio.exe' run -e esp32-s3-n8r2
+
+  & 'C:\Users\Snowhazee1\.platformio\penv\Scripts\platformio.exe' run -e esp32-s3-n8r2 -t upload
+
+ระบบจะพยายามค้นหาพอร์ตของบอร์ดให้อัตโนมัติ ถ้ามีหลายพอร์ตให้ระบุพอร์ต
+USB ของ ESP32 โดยตรง เช่น:
+
+  & 'C:\Users\Snowhazee1\.platformio\penv\Scripts\platformio.exe' run -e esp32-s3-n8r2 -t upload --upload-port COM5
+
+ไฟล์ผลลัพธ์อยู่ที่:
+  .pio\build\esp32-s3-n8r2\firmware.bin
+
+Build อย่างเดียวไม่เปลี่ยนโปรแกรมในบอร์ด ต้อง Upload ด้วย
+
+
+5. เปิด Serial Monitor ดู log
+------------------------------
+
+1) ปิด Knob Macro และ Configurator ก่อน
+2) เปิด PlatformIO: Monitor หรือรันคำสั่ง:
+
+  & 'C:\Users\Snowhazee1\.platformio\penv\Scripts\platformio.exe' device monitor --port COM5
+
+3) ตั้ง baud rate 115200
+4) กด Ctrl+C ใน Terminal เพื่อปิด Monitor ก่อนเปิดโปรแกรมอื่นที่ใช้ COM port
+
+ตัวอย่าง log:
+  BUTTON|K1(GPIO4)=PRESSED
+    บอร์ดอ่านปุ่ม K1 ว่าถูกกด
+
+  BUTTON|ENC_SW(GPIO8)=PRESSED
+    บอร์ดอ่านสวิตช์ knob ว่าถูกกด; Knob Macro ใช้ข้อความนี้สั่งปุ่ม Windows
+
+  HID|CONNECTED
+    บอร์ดเชื่อมต่อกับโฮสต์ USB HID แล้ว
+
+  HID|NOT_CONNECTED
+    ยังไม่มีการเชื่อมต่อ USB HID; ไม่ได้แปลว่า COM port ใช้งานไม่ได้
+
+ข้อความ BUTTON ยืนยันว่าอ่านสวิตช์ได้ แต่ไม่ได้ยืนยันว่า Windows รับ HID
+หากใช้ Knob Macro ให้ตรวจว่าโปรแกรมแสดงสถานะ Connected และลอง Test key
+
+
+6. ข้อควรจำ
+------------
+
+- COM port หนึ่งพอร์ตเปิดใช้งานได้โดยโปรแกรมเดียวในเวลาเดียวกัน
+- ปิด Serial Monitor ก่อนใช้ Knob Macro หรือ Configurator
+- ปุ่ม macro ใช้ event จาก GPIO8 (SW) ไม่ใช่สัญญาณหมุน A/B
+- K1/K2/K3 ยังคงทำงานตามเฟิร์มแวร์และการเชื่อมต่อ USB HID
+- ถ้าปุ่ม Windows ไม่ทำงาน ให้ทดสอบ Test key ก่อน; ถ้า Test key ได้
+  แต่กด knob ไม่ได้ ให้ตรวจ COM port, สถานะ Connected และ log SW

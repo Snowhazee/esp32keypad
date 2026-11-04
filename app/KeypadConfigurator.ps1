@@ -7,6 +7,14 @@ Add-Type -AssemblyName System.IO.Ports
 $script:serialPort = $null
 $script:receiveBuffer = ''
 $script:updatingControls = $false
+$script:autoDetecting = $false
+$script:autoDetectPorts = @()
+$script:autoDetectIndex = 0
+$script:autoDetectDeadline = [datetime]::MinValue
+$script:awaitingConfiguration = $false
+$script:lastConfigurationRequest = [datetime]::MinValue
+$script:awaitingSave = $false
+$script:saveDeadline = [datetime]::MinValue
 
 $form = New-Object System.Windows.Forms.Form
 $form.Text = 'ESP32 Keypad'
@@ -19,7 +27,7 @@ $layout = New-Object System.Windows.Forms.TableLayoutPanel
 $layout.Dock = 'Fill'
 $layout.Padding = New-Object System.Windows.Forms.Padding(16)
 $layout.ColumnCount = 3
-$layout.RowCount = 8
+$layout.RowCount = 6
 $layout.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Absolute', 150)))
 $layout.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Percent', 100)))
 $layout.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Absolute', 88)))
@@ -65,14 +73,9 @@ $layout.SetColumnSpan($separator, 3)
 
 $buttonCombos = @()
 for ($index = 0; $index -lt 3; $index++) {
-    Add-Label "Button $($index + 1)" ($index + 3)
+    Add-Label "K$($index + 1)" ($index + 3)
     $buttonCombos += Add-Combo ($index + 3)
 }
-
-Add-Label 'Encoder clockwise' 6
-$clockwiseCombo = Add-Combo 6
-Add-Label 'Encoder counter-clockwise' 7
-$counterClockwiseCombo = Add-Combo 7
 
 $bottom = New-Object System.Windows.Forms.FlowLayoutPanel
 $bottom.Dock = 'Bottom'
@@ -92,10 +95,18 @@ $encoderPressCombo.Width = 110
 $encoderPressCombo.DropDownStyle = 'DropDownList'
 $bottom.Controls.Add($encoderPressCombo)
 
+$resetProfileButton = New-Object System.Windows.Forms.Button
+$resetProfileButton.Text = 'Reset profile'
+$resetProfileButton.Width = 105
+$resetProfileButton.Height = 30
+$resetProfileButton.Enabled = $false
+$bottom.Controls.Add($resetProfileButton)
+
 $saveButton = New-Object System.Windows.Forms.Button
 $saveButton.Text = 'Save to keypad'
 $saveButton.Width = 118
 $saveButton.Height = 30
+$saveButton.Enabled = $false
 $bottom.Controls.Add($saveButton)
 $updateButton = New-Object System.Windows.Forms.Button
 $updateButton.Text = 'Update firmware...'
@@ -104,44 +115,72 @@ $updateButton.Height = 30
 $bottom.Controls.Add($updateButton)
 $statusLabel = New-Object System.Windows.Forms.Label
 $statusLabel.Text = 'Not connected'
-$statusLabel.Width = 510
+$statusLabel.Width = 390
 $statusLabel.Height = 24
 $bottom.Controls.Add($statusLabel)
 
-$keyOptions = @()
-$keyOptions += [pscustomobject]@{ Text = 'None'; Value = 0 }
-for ($code = 32; $code -le 126; $code++) {
+$keyOptions = @('None')
+foreach ($code in 97..122) {
     $character = [char]$code
-    $display = if ($code -eq 32) { 'Space' } else { [string]$character }
-    $keyOptions += [pscustomobject]@{ Text = $display; Value = $code }
+    $keyOptions += [string]$character
 }
-
-$actionOptions = @([pscustomobject]@{ Text = 'Off'; Value = 0 }, [pscustomobject]@{ Text = 'Volume'; Value = -1 })
-for ($code = 32; $code -le 126; $code++) {
+foreach ($code in 48..57) {
     $character = [char]$code
-    $display = if ($code -eq 32) { 'Key: Space' } else { "Key: $character" }
-    $actionOptions += [pscustomobject]@{ Text = $display; Value = $code }
+    $keyOptions += [string]$character
 }
+$keyOptions += 'Space'
+$encoderPressOptions = @($keyOptions) + 'Windows key'
 
-foreach ($combo in ($buttonCombos + @($encoderPressCombo))) {
-    $combo.DisplayMember = 'Text'
-    $combo.ValueMember = 'Value'
-    $combo.DataSource = @($keyOptions)
+foreach ($combo in $buttonCombos) {
+    [void]$combo.Items.AddRange([object[]]$keyOptions)
 }
-foreach ($combo in @($clockwiseCombo, $counterClockwiseCombo)) {
-    $combo.DisplayMember = 'Text'
-    $combo.ValueMember = 'Value'
-    $combo.DataSource = @($actionOptions)
+[void]$encoderPressCombo.Items.AddRange([object[]]$encoderPressOptions)
+
+for ($index = 0; $index -lt $buttonCombos.Count; $index++) {
+    $combo = $buttonCombos[$index]
+    $combo.AccessibleName = "Button $($index + 1) key"
+    $combo.DropDownStyle = 'DropDownList'
 }
+$encoderPressCombo.AccessibleName = 'Encoder press key'
+$encoderPressCombo.DropDownStyle = 'DropDownList'
 
 function Set-ComboValue($combo, [int]$value) {
-    for ($index = 0; $index -lt $combo.Items.Count; $index++) {
-        if ($combo.Items[$index].Value -eq $value) {
-            $combo.SelectedIndex = $index
-            return
-        }
+    if ($value -ge 65 -and $value -le 90) {
+        $value += 32
     }
-    $combo.SelectedIndex = 0
+    if ($value -eq 0) {
+        $combo.SelectedIndex = 0
+    } elseif ($value -ge 97 -and $value -le 122) {
+        $combo.SelectedIndex = $value - 96
+    } elseif ($value -ge 48 -and $value -le 57) {
+        $combo.SelectedIndex = 27 + $value - 48
+    } elseif ($value -eq 32) {
+        $combo.SelectedIndex = 37
+    } elseif ($value -eq 131 -and $combo.Items.Count -gt 38) {
+        $combo.SelectedIndex = 38
+    } else {
+        $combo.SelectedIndex = 0
+    }
+}
+
+function Get-ComboValue($combo, [bool]$allowWindowsKey = $false) {
+    $index = $combo.SelectedIndex
+    if ($index -eq 0) {
+        return 0
+    }
+    if ($index -ge 1 -and $index -le 26) {
+        return 96 + $index
+    }
+    if ($index -ge 27 -and $index -le 36) {
+        return 48 + $index - 27
+    }
+    if ($index -eq 37) {
+        return 32
+    }
+    if ($allowWindowsKey -and $index -eq 38) {
+        return 131
+    }
+    throw "Select a key from the list for '$($combo.AccessibleName)'."
 }
 
 function Send-Command([string]$command) {
@@ -151,10 +190,22 @@ function Send-Command([string]$command) {
     $script:serialPort.WriteLine($command)
 }
 
+function Get-SerialPortCandidates {
+    $portNames = @([System.IO.Ports.SerialPort]::GetPortNames() | Sort-Object)
+    $usbPortNames = @(
+        Get-CimInstance -ClassName Win32_SerialPort -ErrorAction Stop |
+            Where-Object { $_.PNPDeviceID -like 'USB\*' -and $portNames -contains $_.DeviceID } |
+            ForEach-Object { $_.DeviceID } |
+            Sort-Object
+    )
+    $otherPortNames = @($portNames | Where-Object { $usbPortNames -notcontains $_ })
+    return @($usbPortNames) + @($otherPortNames)
+}
+
 function Refresh-Ports {
     $selectedPort = [string]$portCombo.SelectedItem
     $portCombo.Items.Clear()
-    foreach ($portName in [System.IO.Ports.SerialPort]::GetPortNames() | Sort-Object) {
+    foreach ($portName in Get-SerialPortCandidates) {
         [void]$portCombo.Items.Add($portName)
     }
     if ($portCombo.Items.Contains($selectedPort)) {
@@ -164,31 +215,93 @@ function Refresh-Ports {
     }
 }
 
+function Close-SerialPort {
+      if ($null -ne $script:serialPort) {
+          if ($script:serialPort.IsOpen) { $script:serialPort.Close() }
+          $script:serialPort.Dispose()
+          $script:serialPort = $null
+      }
+}
+
+function Try-NextAutoDetectPort {
+      while ($script:autoDetectIndex -lt $script:autoDetectPorts.Count) {
+          $portName = $script:autoDetectPorts[$script:autoDetectIndex]
+          $script:autoDetectIndex++
+          try {
+              $script:serialPort = New-Object System.IO.Ports.SerialPort
+              $script:serialPort.PortName = $portName
+              $script:serialPort.BaudRate = 115200
+              $script:serialPort.DtrEnable = $true
+              $script:serialPort.RtsEnable = $true
+              $script:serialPort.NewLine = "`n"
+              $script:serialPort.Open()
+              $portCombo.SelectedItem = $portName
+              $script:receiveBuffer = ''
+              $script:autoDetectDeadline = [datetime]::Now.AddSeconds(5)
+              $script:awaitingConfiguration = $true
+              $script:lastConfigurationRequest = [datetime]::Now
+              $statusLabel.Text = "Checking $portName for keypad..."
+              Send-Command 'GET'
+              return
+          } catch {
+              Close-SerialPort
+          }
+      }
+
+      $script:autoDetecting = $false
+      $portCombo.Enabled = $true
+      $connectButton.Enabled = $true
+      $scanButton.Enabled = $true
+      $statusLabel.Text = 'Keypad not found. Check the USB cable, then select a port and connect.'
+}
+
 function Apply-Configuration([string]$line) {
-    $parts = $line.Split('|')
-    if ($parts.Count -ne 8 -or $parts[0] -ne 'CFG') {
-        return
-    }
-    $script:updatingControls = $true
-    try {
-        Set-ComboValue $buttonCombos[0] ([int]$parts[2])
-        Set-ComboValue $buttonCombos[1] ([int]$parts[3])
-        Set-ComboValue $buttonCombos[2] ([int]$parts[4])
-        Set-ComboValue $clockwiseCombo ([int]$parts[5])
-        Set-ComboValue $counterClockwiseCombo ([int]$parts[6])
-        Set-ComboValue $encoderPressCombo ([int]$parts[7])
-        $statusLabel.Text = "Connected to $($portCombo.SelectedItem) - Profile $([int]$parts[1] + 1)"
+      $parts = $line.Split('|')
+      if ($parts.Count -ne 8 -or $parts[0] -ne 'CFG') {
+          return $false
+      }
+      $script:updatingControls = $true
+      try {
+          $profileCombo.SelectedIndex = [int]$parts[1]
+          Set-ComboValue $buttonCombos[0] ([int]$parts[2])
+          Set-ComboValue $buttonCombos[1] ([int]$parts[3])
+          Set-ComboValue $buttonCombos[2] ([int]$parts[4])
+          Set-ComboValue $encoderPressCombo ([int]$parts[7])
+          $script:awaitingConfiguration = $false
+          $saveButton.Enabled = $true
+          $resetProfileButton.Enabled = $true
+          $statusLabel.Text = "Connected to $($portCombo.SelectedItem) - Profile $([int]$parts[1] + 1)"
     } finally {
         $script:updatingControls = $false
     }
+    return $true
+}
+
+function Start-AutoDetect {
+    Refresh-Ports
+    $script:autoDetectPorts = @(Get-SerialPortCandidates)
+    if ($script:autoDetectPorts.Count -eq 0) {
+        $statusLabel.Text = 'No serial ports found. Connect the keypad and click Refresh.'
+        return
+    }
+
+    $script:autoDetecting = $true
+    $script:autoDetectIndex = 0
+    $portCombo.Enabled = $false
+    $connectButton.Enabled = $false
+    $scanButton.Enabled = $false
+    $statusLabel.Text = 'Searching for keypad...'
+    Try-NextAutoDetectPort
 }
 
 $scanButton.Add_Click({ Refresh-Ports })
 $connectButton.Add_Click({
     if ($null -ne $script:serialPort -and $script:serialPort.IsOpen) {
-        $script:serialPort.Close()
-        $script:serialPort.Dispose()
-        $script:serialPort = $null
+        Close-SerialPort
+        $script:awaitingConfiguration = $false
+        $script:awaitingSave = $false
+        $saveButton.Enabled = $false
+        $resetProfileButton.Enabled = $false
         $connectButton.Text = 'Connect'
         $statusLabel.Text = 'Not connected'
         return
@@ -201,12 +314,22 @@ $connectButton.Add_Click({
         $script:serialPort = New-Object System.IO.Ports.SerialPort
         $script:serialPort.PortName = [string]$portCombo.SelectedItem
         $script:serialPort.BaudRate = 115200
+        $script:serialPort.DtrEnable = $true
+        $script:serialPort.RtsEnable = $true
         $script:serialPort.NewLine = "`n"
         $script:serialPort.Open()
         $connectButton.Text = 'Disconnect'
-        $statusLabel.Text = 'Connected; reading settings...'
+        $script:receiveBuffer = ''
+        $script:awaitingConfiguration = $true
+        $script:autoDetectDeadline = [datetime]::Now.AddSeconds(5)
+        $script:lastConfigurationRequest = [datetime]::Now
+        $saveButton.Enabled = $false
+        $resetProfileButton.Enabled = $false
+        $statusLabel.Text = "Checking $($portCombo.SelectedItem) for keypad..."
         Send-Command 'GET'
     } catch {
+        Close-SerialPort
+        $connectButton.Text = 'Connect'
         $statusLabel.Text = 'Connection failed'
         [System.Windows.Forms.MessageBox]::Show($_.Exception.Message, 'Serial connection failed')
     }
@@ -223,33 +346,128 @@ $saveButton.Add_Click({
         [System.Windows.Forms.MessageBox]::Show('Connect to the keypad first.', 'Not connected')
         return
     }
-    for ($index = 0; $index -lt 3; $index++) {
-        Send-Command "SET|$index|$($buttonCombos[$index].SelectedItem.Value)"
+
+    try {
+        $buttonValues = @()
+        foreach ($combo in $buttonCombos) {
+            $buttonValues += Get-ComboValue $combo
+        }
+        $encoderPressValue = Get-ComboValue $encoderPressCombo $true
+    } catch {
+        [System.Windows.Forms.MessageBox]::Show($_.Exception.Message, 'Invalid key selection')
+        return
     }
-    Send-Command "SET|3|$($clockwiseCombo.SelectedItem.Value)"
-    Send-Command "SET|4|$($counterClockwiseCombo.SelectedItem.Value)"
-    Send-Command "SET|5|$($encoderPressCombo.SelectedItem.Value)"
+
+    for ($index = 0; $index -lt 3; $index++) {
+        Send-Command "SET|$index|$($buttonValues[$index])"
+    }
+    Send-Command "SET|5|$encoderPressValue"
     Send-Command 'SAVE'
-    $statusLabel.Text = 'Settings saved to keypad'
+    $script:awaitingSave = $true
+    $script:saveDeadline = [datetime]::Now.AddSeconds(2)
+    $saveButton.Enabled = $false
+    $resetProfileButton.Enabled = $false
+    $statusLabel.Text = "Saving to $($portCombo.SelectedItem)..."
+})
+
+$resetProfileButton.Add_Click({
+    if ($null -eq $script:serialPort -or -not $script:serialPort.IsOpen) {
+        [System.Windows.Forms.MessageBox]::Show('Connect to the keypad first.', 'Not connected')
+        return
+    }
+
+    $profileName = [string]$profileCombo.SelectedItem
+    $confirmation = [System.Windows.Forms.MessageBox]::Show(
+        "Reset $profileName to K1=Z, K2=X, K3=Y and knob press=Windows key? Other profiles will not change.",
+        'Reset current profile',
+        [System.Windows.Forms.MessageBoxButtons]::YesNo,
+        [System.Windows.Forms.MessageBoxIcon]::Question)
+    if ($confirmation -ne [System.Windows.Forms.DialogResult]::Yes) {
+        return
+    }
+
+    $script:updatingControls = $true
+    try {
+        Set-ComboValue $buttonCombos[0] 122
+        Set-ComboValue $buttonCombos[1] 120
+        Set-ComboValue $buttonCombos[2] 121
+        Set-ComboValue $encoderPressCombo 131
+    } finally {
+        $script:updatingControls = $false
+    }
+
+    Send-Command 'SET|0|122'
+    Send-Command 'SET|1|120'
+    Send-Command 'SET|2|121'
+    Send-Command 'SET|3|0'
+    Send-Command 'SET|4|0'
+    Send-Command 'SET|5|131'
+    Send-Command 'SAVE'
+    $script:awaitingSave = $true
+    $script:saveDeadline = [datetime]::Now.AddSeconds(2)
+    $saveButton.Enabled = $false
+    $resetProfileButton.Enabled = $false
+    $statusLabel.Text = "Saving $profileName defaults to $($portCombo.SelectedItem)..."
 })
 
 $pollTimer = New-Object System.Windows.Forms.Timer
 $pollTimer.Interval = 50
 $pollTimer.Add_Tick({
-    if ($null -eq $script:serialPort -or -not $script:serialPort.IsOpen -or $script:serialPort.BytesToRead -eq 0) {
+    if ($null -eq $script:serialPort -or -not $script:serialPort.IsOpen) {
         return
     }
     try {
-        $script:receiveBuffer += $script:serialPort.ReadExisting()
-        while ($script:receiveBuffer.Contains("`n")) {
-            $line, $script:receiveBuffer = $script:receiveBuffer -split "`n", 2
-            Apply-Configuration $line.Trim()
-            if ($line.Trim() -eq 'SAVED') {
-                $statusLabel.Text = 'Settings saved to keypad'
+        if ($script:serialPort.BytesToRead -gt 0) {
+            $script:receiveBuffer += $script:serialPort.ReadExisting()
+            while ($script:receiveBuffer.Contains("`n")) {
+                $line, $script:receiveBuffer = $script:receiveBuffer -split "`n", 2
+                $configurationReceived = Apply-Configuration $line.Trim()
+                if ($configurationReceived -and $script:autoDetecting) {
+                    $script:autoDetecting = $false
+                    $portCombo.Enabled = $true
+                    $connectButton.Enabled = $true
+                    $scanButton.Enabled = $true
+                    $connectButton.Text = 'Disconnect'
+                }
+                if ($line.Trim() -eq 'SAVED') {
+                    $script:awaitingSave = $false
+                    $saveButton.Enabled = $true
+                    $resetProfileButton.Enabled = $true
+                    $statusLabel.Text = "Settings saved to $($portCombo.SelectedItem)"
+                }
             }
         }
+        if ($script:autoDetecting -and [datetime]::Now -ge $script:autoDetectDeadline) {
+            $script:awaitingConfiguration = $false
+            Close-SerialPort
+            Try-NextAutoDetectPort
+        } elseif ($script:awaitingConfiguration -and [datetime]::Now -ge $script:autoDetectDeadline) {
+            $script:awaitingConfiguration = $false
+            Close-SerialPort
+            $connectButton.Text = 'Connect'
+            $saveButton.Enabled = $false
+            $resetProfileButton.Enabled = $false
+            $statusLabel.Text = "No keypad response on $($portCombo.SelectedItem). Select the ESP32 serial port and connect."
+        }
+        if ($script:awaitingConfiguration -and
+            [datetime]::Now -ge $script:lastConfigurationRequest.AddMilliseconds(300)) {
+            Send-Command 'GET'
+            $script:lastConfigurationRequest = [datetime]::Now
+        }
+        if ($script:awaitingSave -and [datetime]::Now -ge $script:saveDeadline) {
+            $script:awaitingSave = $false
+            $saveButton.Enabled = $true
+            $resetProfileButton.Enabled = $true
+            $statusLabel.Text = "No save confirmation from $($portCombo.SelectedItem). Check the connection and try again."
+        }
     } catch {
-        $statusLabel.Text = 'Serial read failed'
+        $statusLabel.Text = "Serial read failed: $($_.Exception.Message)"
+        $script:awaitingConfiguration = $false
+        Close-SerialPort
+        $connectButton.Text = 'Connect'
+        if ($script:autoDetecting) {
+            Try-NextAutoDetectPort
+        }
     }
 })
 $pollTimer.Start()
@@ -303,11 +521,9 @@ $updateButton.Add_Click({
 
 $form.Add_FormClosing({
     $pollTimer.Stop()
-    if ($null -ne $script:serialPort) {
-        if ($script:serialPort.IsOpen) { $script:serialPort.Close() }
-        $script:serialPort.Dispose()
-    }
+    Close-SerialPort
 })
 
 Refresh-Ports
+$form.Add_Shown({ Start-AutoDetect })
 [void]$form.ShowDialog()

@@ -1,20 +1,20 @@
 #include <Arduino.h>
 #include <Preferences.h>
 #include <USB.h>
-#include <USBHIDConsumerControl.h>
 #include <USBHIDKeyboard.h>
 
 namespace {
 
 constexpr uint8_t kButtonPins[] = {4, 5, 6};
+constexpr const char *kButtonNames[] = {"K1", "K2", "K3"};
 constexpr size_t kButtonCount = sizeof(kButtonPins) / sizeof(kButtonPins[0]);
-constexpr uint8_t kEncoderAPin = 7;
-constexpr uint8_t kEncoderBPin = 9;
 constexpr uint8_t kEncoderSwitchPin = 8;
 constexpr uint32_t kDebounceMs = 20;
 constexpr size_t kProfileCount = 3;
-constexpr int16_t kVolumeAction = -1;
+constexpr int16_t kStartMenuAction = -1;
 constexpr int16_t kNoAction = 0;
+constexpr uint8_t kEncoderPressDefault = KEY_LEFT_GUI;
+constexpr uint8_t kProfileConfigVersion = 1;
 constexpr size_t kCommandBufferSize = 64;
 
 struct ButtonState {
@@ -34,17 +34,16 @@ struct ProfileConfig {
 ButtonState buttons[kButtonCount] = {};
 ButtonState encoderButton = {};
 USBHIDKeyboard keyboard;
-USBHIDConsumerControl consumerControl;
 Preferences preferences;
 ProfileConfig profiles[kProfileCount];
 uint8_t activeProfile = 0;
-uint8_t encoderState = 0;
-int8_t encoderTransitionCount = 0;
 char commandBuffer[kCommandBufferSize] = {};
 size_t commandLength = 0;
+bool hidMounted = false;
+bool hidStatusInitialized = false;
 
 ProfileConfig defaultProfile() {
-  return {{'z', 'x', 'c'}, kVolumeAction, kVolumeAction, kNoAction};
+  return {{'z', 'x', 'y'}, kNoAction, kNoAction, kEncoderPressDefault};
 }
 
 ProfileConfig &currentProfile() {
@@ -61,12 +60,32 @@ void saveProfiles() {
 
 void loadProfiles() {
   preferences.begin("keypad", false);
+  const bool migrateEncoderPress =
+      preferences.getUChar("cfgver", 0) < kProfileConfigVersion;
   for (size_t index = 0; index < kProfileCount; index++) {
     profiles[index] = defaultProfile();
     char key[3] = {'p', static_cast<char>('0' + index), '\0'};
     if (preferences.getBytesLength(key) == sizeof(ProfileConfig)) {
       preferences.getBytes(key, &profiles[index], sizeof(ProfileConfig));
+      bool profileChanged = false;
+      if (profiles[index].buttonKeys[0] == 'z' &&
+          profiles[index].buttonKeys[1] == 'x' &&
+          profiles[index].buttonKeys[2] == 'c') {
+        profiles[index].buttonKeys[2] = 'y';
+        profileChanged = true;
+      }
+      if (migrateEncoderPress &&
+          profiles[index].encoderPressKey == kNoAction) {
+        profiles[index].encoderPressKey = kEncoderPressDefault;
+        profileChanged = true;
+      }
+      if (profileChanged) {
+        preferences.putBytes(key, &profiles[index], sizeof(ProfileConfig));
+      }
     }
+  }
+  if (migrateEncoderPress) {
+    preferences.putUChar("cfgver", kProfileConfigVersion);
   }
   activeProfile = preferences.getUChar("active", 0);
   if (activeProfile >= kProfileCount) {
@@ -106,7 +125,19 @@ void checkPsram() {
   free(testBuffer);
 }
 
-void updateButton(ButtonState &button, uint8_t pin, uint8_t key, uint32_t now) {
+void updateHidStatus() {
+  const bool connected = static_cast<bool>(USB);
+  if (hidStatusInitialized && connected == hidMounted) {
+    return;
+  }
+
+  hidMounted = connected;
+  hidStatusInitialized = true;
+  Serial.printf("HID|%s\n", hidMounted ? "CONNECTED" : "NOT_CONNECTED");
+}
+
+void updateButton(ButtonState &button, uint8_t pin, uint8_t key,
+                  const char *name, uint32_t now, bool tapOnPress = false) {
   const bool reading = digitalRead(pin);
   if (reading != button.lastReading) {
     button.lastReading = reading;
@@ -123,13 +154,24 @@ void updateButton(ButtonState &button, uint8_t pin, uint8_t key, uint32_t now) {
   }
 
   button.stablePressed = pressed;
+  Serial.printf("BUTTON|%s(GPIO%u)=%s\n", name, pin,
+                pressed ? "PRESSED" : "RELEASED");
   if (pressed) {
-    button.pressedKey = key;
-    if (key != kNoAction) {
-      keyboard.press(key);
+    if (key != kNoAction && hidMounted) {
+      if (tapOnPress) {
+        keyboard.write(key);
+        button.pressedKey = kNoAction;
+      } else {
+        button.pressedKey = key;
+        keyboard.press(button.pressedKey);
+      }
+    } else {
+      button.pressedKey = kNoAction;
     }
   } else if (button.pressedKey != kNoAction) {
-    keyboard.release(button.pressedKey);
+    if (hidMounted) {
+      keyboard.release(button.pressedKey);
+    }
     button.pressedKey = kNoAction;
   }
 }
@@ -137,45 +179,13 @@ void updateButton(ButtonState &button, uint8_t pin, uint8_t key, uint32_t now) {
 void updateButtons(uint32_t now) {
   for (size_t index = 0; index < kButtonCount; index++) {
     updateButton(buttons[index], kButtonPins[index],
-                 currentProfile().buttonKeys[index], now);
+                 currentProfile().buttonKeys[index], kButtonNames[index], now);
   }
 }
 
-void sendVolumeStep(bool increase) {
-  consumerControl.press(increase ? CONSUMER_CONTROL_VOLUME_INCREMENT
-                                 : CONSUMER_CONTROL_VOLUME_DECREMENT);
-  delay(2);
-  consumerControl.release();
-}
-
-void runEncoderAction(int16_t action, bool clockwise) {
-  if (action == kVolumeAction) {
-    sendVolumeStep(clockwise);
-  } else if (action > kNoAction) {
-    keyboard.write(static_cast<uint8_t>(action));
-  }
-
-}
-
-void updateEncoder(uint32_t now) {
-  constexpr int8_t kTransitions[] = {0, -1, 1, 0, 1, 0, 0, -1,
-                                     -1, 0, 0, 1, 0, 1, -1, 0};
-  const uint8_t currentState = (digitalRead(kEncoderAPin) << 1) |
-                               digitalRead(kEncoderBPin);
-  const uint8_t transition = (encoderState << 2) | currentState;
-  encoderTransitionCount += kTransitions[transition];
-  encoderState = currentState;
-
-  if (encoderTransitionCount >= 4) {
-    runEncoderAction(currentProfile().clockwiseAction, true);
-    encoderTransitionCount = 0;
-  } else if (encoderTransitionCount <= -4) {
-    runEncoderAction(currentProfile().counterClockwiseAction, false);
-    encoderTransitionCount = 0;
-  }
-
+void updateEncoderSwitch(uint32_t now) {
   updateButton(encoderButton, kEncoderSwitchPin,
-               currentProfile().encoderPressKey, now);
+               KEY_LEFT_GUI, "ENC_SW", now, true);
 }
 
 void sendConfiguration() {
@@ -209,11 +219,13 @@ void handleCommand(char *command) {
     if (field >= 0 && field < static_cast<int>(kButtonCount) &&
         value >= 32 && value <= 126) {
       config.buttonKeys[field] = static_cast<uint8_t>(value);
-    } else if (field == 3 && value >= kVolumeAction && value <= 126) {
+    } else if (field == 3 && value >= kStartMenuAction && value <= 126) {
       config.clockwiseAction = value;
-    } else if (field == 4 && value >= kVolumeAction && value <= 126) {
+    } else if (field == 4 && value >= kStartMenuAction && value <= 126) {
       config.counterClockwiseAction = value;
     } else if (field == 5 && value >= 0 && value <= 126) {
+      config.encoderPressKey = static_cast<uint8_t>(value);
+    } else if (field == 5 && value == KEY_LEFT_GUI) {
       config.encoderPressKey = static_cast<uint8_t>(value);
     }
     sendConfiguration();
@@ -275,22 +287,18 @@ void setup() {
     buttons[index].lastReading = digitalRead(kButtonPins[index]);
   }
 
-  pinMode(kEncoderAPin, INPUT_PULLUP);
-  pinMode(kEncoderBPin, INPUT_PULLUP);
   pinMode(kEncoderSwitchPin, INPUT_PULLUP);
-  encoderState = (digitalRead(kEncoderAPin) << 1) |
-                 digitalRead(kEncoderBPin);
   encoderButton.lastReading = digitalRead(kEncoderSwitchPin);
 
   keyboard.begin();
-  consumerControl.begin();
   USB.begin();
-  Serial.println("USB HID ready: Z / X / C + volume pot");
+  Serial.println("USB HID keypad started: Z / X / Y");
 }
 
 void loop() {
   const uint32_t now = millis();
+  updateHidStatus();
   updateButtons(now);
-  updateEncoder(now);
+  updateEncoderSwitch(now);
   updateSerialCommands();
 }
