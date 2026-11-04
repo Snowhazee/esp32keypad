@@ -19,15 +19,15 @@ $script:saveDeadline = [datetime]::MinValue
 $form = New-Object System.Windows.Forms.Form
 $form.Text = 'ESP32 Keypad'
 $form.StartPosition = 'CenterScreen'
-$form.ClientSize = New-Object System.Drawing.Size(580, 470)
-$form.MinimumSize = New-Object System.Drawing.Size(596, 509)
+$form.ClientSize = New-Object System.Drawing.Size(640, 570)
+$form.MinimumSize = New-Object System.Drawing.Size(656, 609)
 $form.Font = New-Object System.Drawing.Font('Segoe UI', 9)
 
 $layout = New-Object System.Windows.Forms.TableLayoutPanel
 $layout.Dock = 'Fill'
 $layout.Padding = New-Object System.Windows.Forms.Padding(16)
 $layout.ColumnCount = 3
-$layout.RowCount = 6
+$layout.RowCount = 8
 $layout.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Absolute', 150)))
 $layout.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Percent', 100)))
 $layout.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Absolute', 88)))
@@ -76,6 +76,12 @@ for ($index = 0; $index -lt 3; $index++) {
     Add-Label "K$($index + 1)" ($index + 3)
     $buttonCombos += Add-Combo ($index + 3)
 }
+
+$rotationCombos = @()
+Add-Label 'Knob clockwise' 6
+$rotationCombos += Add-Combo 6
+Add-Label 'Knob counter-clockwise' 7
+$rotationCombos += Add-Combo 7
 
 $bottom = New-Object System.Windows.Forms.FlowLayoutPanel
 $bottom.Dock = 'Bottom'
@@ -129,10 +135,14 @@ foreach ($code in 48..57) {
     $keyOptions += [string]$character
 }
 $keyOptions += 'Space'
-$encoderPressOptions = @($keyOptions) + 'Windows key'
+$encoderPressOptions = @($keyOptions) + 'Windows key' + 'Mute'
+$rotationOptions = @($keyOptions) + 'Windows key' + 'Volume up' + 'Volume down' + 'Mute'
 
 foreach ($combo in $buttonCombos) {
     [void]$combo.Items.AddRange([object[]]$keyOptions)
+}
+foreach ($combo in $rotationCombos) {
+    [void]$combo.Items.AddRange([object[]]$rotationOptions)
 }
 [void]$encoderPressCombo.Items.AddRange([object[]]$encoderPressOptions)
 
@@ -143,8 +153,15 @@ for ($index = 0; $index -lt $buttonCombos.Count; $index++) {
 }
 $encoderPressCombo.AccessibleName = 'Encoder press key'
 $encoderPressCombo.DropDownStyle = 'DropDownList'
+for ($index = 0; $index -lt $rotationCombos.Count; $index++) {
+    $rotationCombos[$index].AccessibleName = "Knob rotation $(@('clockwise', 'counter-clockwise')[$index]) key"
+    $rotationCombos[$index].DropDownStyle = 'DropDownList'
+}
 
 function Set-ComboValue($combo, [int]$value) {
+    if ($value -eq -1) {
+        $value = 131
+    }
     if ($value -ge 65 -and $value -le 90) {
         $value += 32
     }
@@ -158,6 +175,14 @@ function Set-ComboValue($combo, [int]$value) {
         $combo.SelectedIndex = 37
     } elseif ($value -eq 131 -and $combo.Items.Count -gt 38) {
         $combo.SelectedIndex = 38
+    } elseif ($combo.AccessibleName -eq 'Encoder press key' -and $value -eq -4) {
+        $combo.SelectedIndex = 39
+    } elseif ($combo.AccessibleName -like 'Knob rotation*' -and $value -eq -2) {
+        $combo.SelectedIndex = 39
+    } elseif ($combo.AccessibleName -like 'Knob rotation*' -and $value -eq -3) {
+        $combo.SelectedIndex = 40
+    } elseif ($combo.AccessibleName -like 'Knob rotation*' -and $value -eq -4) {
+        $combo.SelectedIndex = 41
     } else {
         $combo.SelectedIndex = 0
     }
@@ -177,8 +202,20 @@ function Get-ComboValue($combo, [bool]$allowWindowsKey = $false) {
     if ($index -eq 37) {
         return 32
     }
-    if ($allowWindowsKey -and $index -eq 38) {
-        return 131
+    if ($allowWindowsKey) {
+        if ($index -eq 38) {
+            return 131
+        }
+        if ($combo.AccessibleName -eq 'Encoder press key' -and $index -eq 39) {
+            return -4
+        }
+        if ($combo.AccessibleName -like 'Knob rotation*') {
+            switch ($index) {
+                39 { return -2 }
+                40 { return -3 }
+                41 { return -4 }
+            }
+        }
     }
     throw "Select a key from the list for '$($combo.AccessibleName)'."
 }
@@ -266,11 +303,15 @@ function Apply-Configuration([string]$line) {
           Set-ComboValue $buttonCombos[0] ([int]$parts[2])
           Set-ComboValue $buttonCombos[1] ([int]$parts[3])
           Set-ComboValue $buttonCombos[2] ([int]$parts[4])
+          Set-ComboValue $rotationCombos[0] ([int]$parts[5])
+          Set-ComboValue $rotationCombos[1] ([int]$parts[6])
           Set-ComboValue $encoderPressCombo ([int]$parts[7])
           $script:awaitingConfiguration = $false
-          $saveButton.Enabled = $true
-          $resetProfileButton.Enabled = $true
-          $statusLabel.Text = "Connected to $($portCombo.SelectedItem) - Profile $([int]$parts[1] + 1)"
+          if (-not $script:awaitingSave) {
+              $saveButton.Enabled = $true
+              $resetProfileButton.Enabled = $true
+              $statusLabel.Text = "Connected to $($portCombo.SelectedItem) - Profile $([int]$parts[1] + 1)"
+          }
     } finally {
         $script:updatingControls = $false
     }
@@ -352,6 +393,8 @@ $saveButton.Add_Click({
         foreach ($combo in $buttonCombos) {
             $buttonValues += Get-ComboValue $combo
         }
+        $clockwiseValue = Get-ComboValue $rotationCombos[0] $true
+        $counterClockwiseValue = Get-ComboValue $rotationCombos[1] $true
         $encoderPressValue = Get-ComboValue $encoderPressCombo $true
     } catch {
         [System.Windows.Forms.MessageBox]::Show($_.Exception.Message, 'Invalid key selection')
@@ -361,6 +404,8 @@ $saveButton.Add_Click({
     for ($index = 0; $index -lt 3; $index++) {
         Send-Command "SET|$index|$($buttonValues[$index])"
     }
+    Send-Command "SET|3|$clockwiseValue"
+    Send-Command "SET|4|$counterClockwiseValue"
     Send-Command "SET|5|$encoderPressValue"
     Send-Command 'SAVE'
     $script:awaitingSave = $true
@@ -378,7 +423,7 @@ $resetProfileButton.Add_Click({
 
     $profileName = [string]$profileCombo.SelectedItem
     $confirmation = [System.Windows.Forms.MessageBox]::Show(
-        "Reset $profileName to K1=Z, K2=X, K3=Y and knob press=Windows key? Other profiles will not change.",
+        "Reset $profileName to K1=Z, K2=X, K3=Y, knob volume up/down, and knob press=mute? Other profiles will not change.",
         'Reset current profile',
         [System.Windows.Forms.MessageBoxButtons]::YesNo,
         [System.Windows.Forms.MessageBoxIcon]::Question)
@@ -391,7 +436,9 @@ $resetProfileButton.Add_Click({
         Set-ComboValue $buttonCombos[0] 122
         Set-ComboValue $buttonCombos[1] 120
         Set-ComboValue $buttonCombos[2] 121
-        Set-ComboValue $encoderPressCombo 131
+        Set-ComboValue $rotationCombos[0] -2
+        Set-ComboValue $rotationCombos[1] -3
+        Set-ComboValue $encoderPressCombo -4
     } finally {
         $script:updatingControls = $false
     }
@@ -399,9 +446,9 @@ $resetProfileButton.Add_Click({
     Send-Command 'SET|0|122'
     Send-Command 'SET|1|120'
     Send-Command 'SET|2|121'
-    Send-Command 'SET|3|0'
-    Send-Command 'SET|4|0'
-    Send-Command 'SET|5|131'
+    Send-Command 'SET|3|-2'
+    Send-Command 'SET|4|-3'
+    Send-Command 'SET|5|-4'
     Send-Command 'SAVE'
     $script:awaitingSave = $true
     $script:saveDeadline = [datetime]::Now.AddSeconds(2)

@@ -11,14 +11,14 @@ Start-KeypadConfigurator.cmd
   เปิดโปรแกรมตั้งค่า keypad
   - ค้นหา COM port และพยายามเชื่อมต่อกับ keypad อัตโนมัติ
   - ตั้งปุ่ม K1, K2, K3 และเลือก profile
-  - ตั้งค่าปุ่มกดแกน knob แล้วกด Save to keypad
+  - ตั้งปุ่มหรือปรับเสียงเมื่อหมุน knob และตั้ง action เมื่อกดแกน knob แล้วกด Save to keypad
   - โปรไฟล์บันทึกลงหน่วยความจำของ ESP32
-  - เฟิร์มแวร์ปัจจุบันปิดการทำงานตอนหมุน knob; ปุ่มกด SW ใช้ส่งปุ่ม Windows
+  - knob ใช้ GPIO7/GPIO8 สำหรับหมุน และ GPIO9 สำหรับปุ่มกด SW
 
 Start-KnobMacro.cmd
   เปิดโปรแกรม macro สำหรับปุ่มกด SW ของ knob
   - เลือก COM port ของ keypad แล้วกด Connect
-  - เมื่อโปรแกรมได้รับ BUTTON|ENC_SW(GPIO8)=PRESSED จะส่งปุ่ม Windows ให้คอม
+  - เมื่อโปรแกรมได้รับ BUTTON|ENC_SW(GPIO9)=PRESSED จะส่งปุ่ม Windows ให้คอม
   - กด Test key เพื่อทดสอบส่งปุ่ม Windows โดยไม่ต้องกด knob
   - เอาเครื่องหมายถูกออกจาก "Knob press sends Windows key" เพื่อปิด macro ชั่วคราว
   - โปรแกรมนี้ใช้ COM port รับข้อความจาก keypad โดยตรง ไม่ต้องพึ่ง Native USB HID
@@ -43,7 +43,7 @@ ESP32-Keypad-Guide.pptx
 7) เมื่อใช้เสร็จ กด Disconnect แล้วปิดหน้าต่างโปรแกรม
 
 ในโหมดนี้การกดสวิตช์ knob จะสั่งปุ่ม Windows ผ่านโปรแกรมบนคอม
-การหมุน knob ถูกปิดไว้ในเฟิร์มแวร์ปัจจุบัน
+การหมุน knob ยังส่ง action ที่ตั้งไว้ผ่าน USB HID ได้ เช่น เพิ่ม/ลดเสียง
 
 
 3. ใช้ Configurator ตั้งค่า keypad
@@ -55,13 +55,14 @@ ESP32-Keypad-Guide.pptx
    ที่ปรากฏเมื่อเสียบ ESP32 ใน Device Manager จากนั้นกด Connect
    ต้องเห็น "Connected to COMx" ก่อน ปุ่ม Save จึงจะใช้งานได้
 4) เลือก Profile 1, 2 หรือ 3
-5) เลือกปุ่มของ K1/K2/K3 และค่าของ Encoder press ตามต้องการ
-   รายการปุ่มมีแบบง่าย ๆ: None, A-Z, 0-9 และ Space
-   ช่อง Encoder press มี Windows key เพิ่มให้เลือก
+5) เลือกปุ่มของ K1/K2/K3 และ action ของ knob ตามต้องการ
+   ตั้ง Knob clockwise เป็น Volume up และ Knob counter-clockwise เป็น Volume down
+   เพื่อปรับเสียง Windows; ตั้ง Encoder press เป็น Mute เพื่อปิด/เปิดเสียง
+   ปุ่ม K1/K2/K3 ยังเลือกได้จาก None, A-Z, 0-9 และ Space
 6) กด Save to keypad เพื่อบันทึกค่าที่เลือก แล้วรอข้อความ
    "Settings saved to COMx"
 7) กด Reset profile หากต้องการคืนค่าเฉพาะโปรไฟล์ที่เลือกเป็น K1=Z, K2=X,
-   K3=Y และ Encoder press=Windows key; ยืนยันหน้าต่างก่อนรีเซ็ต
+   K3=Y, หมุน knob เพื่อเพิ่ม/ลดเสียง และกด knob เพื่อ mute; ยืนยันก่อนรีเซ็ต
 
 การตั้งค่าจาก Configurator มีผลกับโปรไฟล์บนบอร์ด ส่วน Knob Macro
 ฟัง event จาก COM port แล้วส่งปุ่ม Windows ให้ Windows โดยตรง
@@ -90,6 +91,9 @@ USB ของ ESP32 โดยตรง เช่น:
 
   & 'C:\Users\Snowhazee1\.platformio\penv\Scripts\platformio.exe' run -e esp32-s3-n8r2 -t upload --upload-port COM5
 
+ค่า action การหมุน: `-2` เพิ่มเสียง, `-3` ลดเสียง, `-4` mute
+และ `0` ไม่ทำงาน; ปุ่มกดแกน knob ใช้ `-4` สำหรับ mute ได้
+
 ไฟล์ผลลัพธ์อยู่ที่:
   .pio\build\esp32-s3-n8r2\firmware.bin
 
@@ -111,7 +115,13 @@ Build อย่างเดียวไม่เปลี่ยนโปรแ�
   BUTTON|K1(GPIO4)=PRESSED
     บอร์ดอ่านปุ่ม K1 ว่าถูกกด
 
-  BUTTON|ENC_SW(GPIO8)=PRESSED
+  ENCODER|CW
+    บอร์ดอ่านการหมุน knob ตามเข็ม; ปุ่มที่ตั้งไว้จะถูกส่งผ่าน USB HID
+
+  ENCODER|CCW
+    บอร์ดอ่านการหมุน knob ทวนเข็ม; ปุ่มที่ตั้งไว้จะถูกส่งผ่าน USB HID
+
+  BUTTON|ENC_SW(GPIO9)=PRESSED
     บอร์ดอ่านสวิตช์ knob ว่าถูกกด; Knob Macro ใช้ข้อความนี้สั่งปุ่ม Windows
 
   HID|CONNECTED
@@ -129,7 +139,7 @@ Build อย่างเดียวไม่เปลี่ยนโปรแ�
 
 - COM port หนึ่งพอร์ตเปิดใช้งานได้โดยโปรแกรมเดียวในเวลาเดียวกัน
 - ปิด Serial Monitor ก่อนใช้ Knob Macro หรือ Configurator
-- ปุ่ม macro ใช้ event จาก GPIO8 (SW) ไม่ใช่สัญญาณหมุน A/B
+- ปุ่ม macro ใช้ event จาก GPIO9 (SW); GPIO7/GPIO8 ใช้เป็นสัญญาณหมุน A/B
 - K1/K2/K3 ยังคงทำงานตามเฟิร์มแวร์และการเชื่อมต่อ USB HID
 - ถ้าปุ่ม Windows ไม่ทำงาน ให้ทดสอบ Test key ก่อน; ถ้า Test key ได้
   แต่กด knob ไม่ได้ ให้ตรวจ COM port, สถานะ Connected และ log SW

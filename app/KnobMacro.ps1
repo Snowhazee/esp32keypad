@@ -166,13 +166,13 @@ $pollTimer.Add_Tick({
             while ($script:receiveBuffer.Contains("`n")) {
                 $line, $script:receiveBuffer = $script:receiveBuffer -split "`n", 2
                 $line = $line.Trim()
-                if ($line -match '^CFG\|[0-2]\|' -or $line -like 'BUTTON|ENC_SW(GPIO8)=*') {
+                if ($line -match '^CFG\|[0-2]\|' -or $line -like 'BUTTON|ENC_SW(GPIO9)=*') {
                     if ($script:awaitingKeypad) {
                         $script:awaitingKeypad = $false
                         $statusLabel.Text = "Listening on $($portCombo.SelectedItem). Press the knob switch to open Start."
                     }
                 }
-                if ($line -eq 'BUTTON|ENC_SW(GPIO8)=PRESSED') {
+                if ($line -eq 'BUTTON|ENC_SW(GPIO9)=PRESSED') {
                     if ($script:macroEnabled) {
                         Send-WindowsKey
                         $statusLabel.Text = "Windows key sent at $(Get-Date -Format 'HH:mm:ss')."

@@ -4,13 +4,13 @@ For the Thai step-by-step guide to each app, firmware build/upload, and Serial M
 
 ## Start
 
-Double-click `Start-KeypadConfigurator.cmd`. The app checks available COM ports for the keypad and connects automatically when it finds one. If it is not found, connect the keypad with a USB data cable, click **Refresh**, select the COM port that appears for the ESP32 in Device Manager, and click **Connect**. Wait for `Connected to COMx` before saving; the app enables **Save to keypad** and **Reset profile** only after the keypad responds. Choose a profile, assign keys, then click **Save to keypad**. **Reset profile** restores only the selected profile to K1=Z, K2=X, K3=Y, and knob press=Windows key; confirm the prompt to apply it. Wait for `Settings saved to COMx`. The profiles are stored in the ESP32-S3 flash.
+Double-click `Start-KeypadConfigurator.cmd`. The app checks available COM ports for the keypad and connects automatically when it finds one. If it is not found, connect the keypad with a USB data cable, click **Refresh**, select the COM port that appears for the ESP32 in Device Manager, and click **Connect**. Wait for `Connected to COMx` before saving; the app enables **Save to keypad** and **Reset profile** only after the keypad responds. Choose a profile, assign keys, then click **Save to keypad**. **Reset profile** restores only the selected profile to K1=Z, K2=X, K3=Y, knob volume up/down, and knob press=mute; confirm the prompt to apply it. Wait for `Settings saved to COMx`. The profiles are stored in the ESP32-S3 flash.
 
-The app uses the Windows PowerShell and .NET Framework components already included with Windows. No installer is required. Button key choices are kept simple: None, A-Z, 0-9, and Space. The encoder push switch also offers Windows key. In the current firmware, rotating the encoder is disabled; pressing its switch sends the Windows key.
+The app uses the Windows PowerShell and .NET Framework components already included with Windows. No installer is required. Button key choices include None, A-Z, 0-9, and Space. Knob rotation can send keyboard keys or control Windows volume up/down/mute; knob press can send a keyboard key, Windows key, or mute.
 
 ## Knob switch macro
 
-Run `Start-KnobMacro.cmd` to use the knob switch as a Windows-key macro through the serial connection. Close PlatformIO Serial Monitor and any configurator app holding the COM port, select the keypad's COM port (for example, COM4), and click **Connect**. Each `BUTTON|ENC_SW(GPIO8)=PRESSED` event sends a Windows-key tap directly to the PC, so Native USB HID is not required for this macro. Keep the keypad connected to the serial/USB-to-UART port while using the macro app. Use **Test key** to check the Windows macro on the PC before testing the knob.
+Run `Start-KnobMacro.cmd` to use the knob switch as a Windows-key macro through the serial connection. Close PlatformIO Serial Monitor and any configurator app holding the COM port, select the keypad's COM port (for example, COM4), and click **Connect**. Each `BUTTON|ENC_SW(GPIO9)=PRESSED` event sends a Windows-key tap directly to the PC, so Native USB HID is not required for this macro. Keep the keypad connected to the serial/USB-to-UART port while using the macro app. Use **Test key** to check the Windows macro on the PC before testing the knob.
 
 ## Using on another PC
 
@@ -31,4 +31,6 @@ The app communicates over USB CDC at 115200 baud while the keypad exposes USB HI
 - `PROFILE|index` selects one of three profiles.
 - `SAVE` stores all profiles in ESP32 NVS.
 
-The encoder push switch sends a Windows-key tap (opens or closes the Start menu). Encoder rotation is currently disabled. The three keypad buttons remain configurable.
+The knob uses GPIO7/GPIO8 for rotation and GPIO9 for its push switch. Choose Volume up for clockwise and Volume down for counter-clockwise to adjust Windows volume, and Mute for the knob press to toggle mute. The three keypad buttons and knob actions are configurable in each profile.
+
+Rotation action values are `-2` for volume up, `-3` for volume down, `-4` for mute, and `0` for no action. The knob press also accepts `-4` for mute.
