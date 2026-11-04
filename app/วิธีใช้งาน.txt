@@ -58,14 +58,26 @@ ESP32-Keypad-Guide.pptx
 5) เลือกปุ่มของ K1/K2/K3 และ action ของ knob ตามต้องการ
    ตั้ง Knob clockwise เป็น Volume up และ Knob counter-clockwise เป็น Volume down
    เพื่อปรับเสียง Windows; ตั้ง Encoder press เป็น Mute เพื่อปิด/เปิดเสียง
-   ปุ่ม K1/K2/K3 ยังเลือกได้จาก None, A-Z, 0-9 และ Space
-6) กด Save to keypad เพื่อบันทึกค่าที่เลือก แล้วรอข้อความ
+   ปุ่ม K1/K2/K3 เลือกได้จาก None, A-Z, 0-9, Space และ Windows key
+6) หน้า Configurator ใช้ภาษาอังกฤษเพื่อให้ตัวอักษรแสดงผลสม่ำเสมอบน Windows
+7) กด FN LAYER - Show เพื่อเปิดการตั้งค่า Fn ของ knob และ FN LAYER - Hide เพื่อพับเก็บ
+   เลือก action ชุด Fn ได้ เช่น Win + Space เปลี่ยนภาษาแป้นพิมพ์ของ Windows,
+   Alt + Tab สลับหน้าต่าง หรือ Alt + F4 ปิดเกม/แอปที่กำลังใช้งาน
+   กด K1 ค้างอย่างน้อย 150 ms แล้วหมุนหรือกด knob เพื่อเรียก action ชุด Fn
+   K2/K3 ยังคงส่งปุ่มหลักตามปกติ; แตะ K1 สั้นกว่านั้นจะส่งปุ่มเมื่อปล่อย
+   ตั้งค่า Fn ของ knob แยกตามแต่ละโปรไฟล์
+8) ดูแถบสถานะสดด้านล่าง: K1/K2/K3 และ KNOB จะแสดงสถานะกด/ปล่อย
+   ส่วน CW/CCW จะติดสว่างชั่วครู่เมื่อหมุน knob
+9) กด Save to keypad เพื่อบันทึกค่าที่เลือก แล้วรอข้อความ
    "Settings saved to COMx"
-7) กด Reset profile หากต้องการคืนค่าเฉพาะโปรไฟล์ที่เลือกเป็น K1=Z, K2=X,
+10) กด Reset profile หากต้องการคืนค่าเฉพาะโปรไฟล์ที่เลือกเป็น K1=Z, K2=X,
    K3=Y, หมุน knob เพื่อเพิ่ม/ลดเสียง และกด knob เพื่อ mute; ยืนยันก่อนรีเซ็ต
 
 การตั้งค่าจาก Configurator มีผลกับโปรไฟล์บนบอร์ด ส่วน Knob Macro
 ฟัง event จาก COM port แล้วส่งปุ่ม Windows ให้ Windows โดยตรง
+
+การใช้ Fn และ shortcut ต้อง Build และ Upload เฟิร์มแวร์รุ่นปัจจุบันหนึ่งครั้ง เพราะมีการเพิ่ม
+รูปแบบส่ง configuration สำหรับ Fn layer จากนั้นจึงตั้งค่าและ Save ผ่านแอปได้
 
 
 4. Build และ Upload เฟิร์มแวร์

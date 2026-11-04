@@ -13,15 +13,20 @@ constexpr uint8_t kEncoderAPin = 7;
 constexpr uint8_t kEncoderBPin = 8;
 constexpr uint8_t kEncoderSwitchPin = 9;
 constexpr uint32_t kDebounceMs = 20;
+constexpr uint32_t kFnHoldThresholdMs = 150;
 constexpr size_t kProfileCount = 3;
 constexpr int16_t kStartMenuAction = -1;
 constexpr int16_t kVolumeUpAction = -2;
 constexpr int16_t kVolumeDownAction = -3;
 constexpr int16_t kMuteAction = -4;
+constexpr int16_t kSwitchInputLanguageAction = -5;
+constexpr int16_t kAltTabAction = -6;
+constexpr int16_t kAltF4Action = -7;
 constexpr int16_t kNoAction = 0;
 constexpr int16_t kWindowsKeyAction = 131;
 constexpr uint8_t kEncoderPressDefault = KEY_LEFT_GUI;
-constexpr uint8_t kProfileConfigVersion = 2;
+constexpr uint8_t kKnobDefaultMigrationVersion = 5;
+constexpr uint8_t kProfileConfigVersion = 8;
 constexpr size_t kCommandBufferSize = 64;
 
 struct ButtonState {
@@ -31,12 +36,67 @@ struct ButtonState {
   uint8_t pressedKey;
 };
 
-struct ProfileConfig {
+struct LegacyProfileConfigV3 {
+  uint8_t buttonKeys[kButtonCount];
+  uint8_t buttonHoldKeys[kButtonCount];
+  uint16_t buttonRepeatMs[kButtonCount];
+  uint8_t buttonSequences[kButtonCount][6];
+  int16_t clockwiseAction;
+  int16_t counterClockwiseAction;
+  int16_t encoderPressKey;
+};
+
+struct LegacyProfileConfigV4 {
+  uint8_t buttonKeys[kButtonCount];
+  uint16_t buttonRepeatMs[kButtonCount];
+  int16_t clockwiseAction;
+  int16_t counterClockwiseAction;
+  int16_t encoderPressKey;
+};
+
+struct LegacyProfileConfigV5 {
+  uint8_t buttonKeys[kButtonCount];
+  uint8_t buttonRepeatEnabled[kButtonCount];
+  int16_t clockwiseAction;
+  int16_t counterClockwiseAction;
+  int16_t encoderPressKey;
+};
+
+struct ProfileConfigV6 {
   uint8_t buttonKeys[kButtonCount];
   int16_t clockwiseAction;
   int16_t counterClockwiseAction;
   int16_t encoderPressKey;
 };
+
+struct ProfileConfigV7 {
+  uint8_t buttonKeys[kButtonCount];
+  uint8_t fnButtonKeys[kButtonCount - 1];
+  int16_t clockwiseAction;
+  int16_t counterClockwiseAction;
+  int16_t encoderPressKey;
+  int16_t fnClockwiseAction;
+  int16_t fnCounterClockwiseAction;
+  int16_t fnEncoderPressKey;
+};
+
+struct ProfileConfig {
+  uint8_t buttonKeys[kButtonCount];
+  int16_t fnButtonKeys[kButtonCount - 1];
+  int16_t clockwiseAction;
+  int16_t counterClockwiseAction;
+  int16_t encoderPressKey;
+  int16_t fnClockwiseAction;
+  int16_t fnCounterClockwiseAction;
+  int16_t fnEncoderPressKey;
+};
+
+static_assert(sizeof(LegacyProfileConfigV3) == 36);
+static_assert(sizeof(LegacyProfileConfigV4) == 16);
+static_assert(sizeof(LegacyProfileConfigV5) == 12);
+static_assert(sizeof(ProfileConfigV6) == 10);
+static_assert(sizeof(ProfileConfigV7) == 18);
+static_assert(sizeof(ProfileConfig) == 20);
 
 ButtonState buttons[kButtonCount] = {};
 ButtonState encoderButton = {};
@@ -51,13 +111,65 @@ uint8_t encoderState = 0;
 int8_t encoderDelta = 0;
 bool hidMounted = false;
 bool hidStatusInitialized = false;
+uint32_t fnButtonPressMs = 0;
+bool fnLayerActive = false;
 
 ProfileConfig defaultProfile() {
-  return {{'z', 'x', 'y'}, kVolumeUpAction, kVolumeDownAction, kMuteAction};
+  ProfileConfig config{};
+  config.buttonKeys[0] = 'z';
+  config.buttonKeys[1] = 'x';
+  config.buttonKeys[2] = 'y';
+  config.clockwiseAction = kVolumeUpAction;
+  config.counterClockwiseAction = kVolumeDownAction;
+  config.encoderPressKey = kMuteAction;
+  return config;
 }
 
 ProfileConfig &currentProfile() {
   return profiles[activeProfile];
+}
+
+bool isShortcutAction(int16_t action) {
+  return action == kSwitchInputLanguageAction || action == kAltTabAction ||
+         action == kAltF4Action;
+}
+
+void sendShortcut(int16_t action) {
+  uint8_t modifier = KEY_LEFT_ALT;
+  uint8_t key = 0;
+  if (action == kSwitchInputLanguageAction) {
+    modifier = KEY_LEFT_GUI;
+    key = ' ';
+  } else if (action == kAltTabAction) {
+    key = KEY_TAB;
+  } else if (action == kAltF4Action) {
+    key = KEY_F4;
+  } else {
+    return;
+  }
+
+  keyboard.press(modifier);
+  keyboard.press(key);
+  delay(10);
+  keyboard.release(key);
+  keyboard.release(modifier);
+}
+
+void sendTapAction(int16_t action) {
+  if (!hidMounted) {
+    return;
+  }
+  if (action == kSwitchInputLanguageAction || action == kAltTabAction ||
+      action == kAltF4Action) {
+    sendShortcut(action);
+  } else if (action == kMuteAction) {
+    consumerControl.press(CONSUMER_CONTROL_MUTE);
+    consumerControl.release();
+  } else if (action != kNoAction && hidMounted) {
+    keyboard.write(action == kWindowsKeyAction || action == kStartMenuAction
+                       ? KEY_LEFT_GUI
+                       : static_cast<uint8_t>(action));
+  }
 }
 
 void saveProfiles() {
@@ -75,9 +187,71 @@ void loadProfiles() {
   for (size_t index = 0; index < kProfileCount; index++) {
     profiles[index] = defaultProfile();
     char key[3] = {'p', static_cast<char>('0' + index), '\0'};
-    if (preferences.getBytesLength(key) == sizeof(ProfileConfig)) {
+    const size_t storedLength = preferences.getBytesLength(key);
+    if (storedLength == sizeof(ProfileConfig)) {
       preferences.getBytes(key, &profiles[index], sizeof(ProfileConfig));
-      bool profileChanged = false;
+    } else if (storedLength == sizeof(ProfileConfigV7)) {
+      ProfileConfigV7 legacy{};
+      preferences.getBytes(key, &legacy, sizeof(legacy));
+      memcpy(profiles[index].buttonKeys, legacy.buttonKeys,
+             sizeof(legacy.buttonKeys));
+      profiles[index].fnButtonKeys[0] = legacy.fnButtonKeys[0];
+      profiles[index].fnButtonKeys[1] = legacy.fnButtonKeys[1];
+      profiles[index].clockwiseAction = legacy.clockwiseAction;
+      profiles[index].counterClockwiseAction =
+          legacy.counterClockwiseAction;
+      profiles[index].encoderPressKey = legacy.encoderPressKey;
+      profiles[index].fnClockwiseAction = legacy.fnClockwiseAction;
+      profiles[index].fnCounterClockwiseAction =
+          legacy.fnCounterClockwiseAction;
+      profiles[index].fnEncoderPressKey = legacy.fnEncoderPressKey;
+    } else if (storedLength == sizeof(ProfileConfigV6)) {
+      ProfileConfigV6 legacy{};
+      preferences.getBytes(key, &legacy, sizeof(legacy));
+      memcpy(profiles[index].buttonKeys, legacy.buttonKeys,
+             sizeof(legacy.buttonKeys));
+      profiles[index].clockwiseAction = legacy.clockwiseAction;
+      profiles[index].counterClockwiseAction =
+          legacy.counterClockwiseAction;
+      profiles[index].encoderPressKey = legacy.encoderPressKey;
+    } else if (storedLength == sizeof(LegacyProfileConfigV5)) {
+      LegacyProfileConfigV5 legacy{};
+      preferences.getBytes(key, &legacy, sizeof(legacy));
+      memcpy(profiles[index].buttonKeys, legacy.buttonKeys,
+             sizeof(legacy.buttonKeys));
+      profiles[index].clockwiseAction = legacy.clockwiseAction;
+      profiles[index].counterClockwiseAction =
+          legacy.counterClockwiseAction;
+      profiles[index].encoderPressKey = legacy.encoderPressKey;
+    } else if (storedLength == sizeof(LegacyProfileConfigV4)) {
+      LegacyProfileConfigV4 legacy{};
+      preferences.getBytes(key, &legacy, sizeof(legacy));
+      memcpy(profiles[index].buttonKeys, legacy.buttonKeys,
+             sizeof(legacy.buttonKeys));
+      profiles[index].clockwiseAction = legacy.clockwiseAction;
+      profiles[index].counterClockwiseAction =
+          legacy.counterClockwiseAction;
+      profiles[index].encoderPressKey = legacy.encoderPressKey;
+    } else if (storedLength == sizeof(LegacyProfileConfigV3)) {
+      LegacyProfileConfigV3 legacy{};
+      preferences.getBytes(key, &legacy, sizeof(legacy));
+      memcpy(profiles[index].buttonKeys, legacy.buttonKeys,
+             sizeof(legacy.buttonKeys));
+      profiles[index].clockwiseAction = legacy.clockwiseAction;
+      profiles[index].counterClockwiseAction =
+          legacy.counterClockwiseAction;
+      profiles[index].encoderPressKey = legacy.encoderPressKey;
+    } else {
+      continue;
+    }
+
+    bool profileChanged = storedLength != sizeof(ProfileConfig);
+    if (storedLength == sizeof(ProfileConfig) ||
+        storedLength == sizeof(ProfileConfigV7) ||
+        storedLength == sizeof(ProfileConfigV6) ||
+        storedLength == sizeof(LegacyProfileConfigV5) ||
+        storedLength == sizeof(LegacyProfileConfigV4) ||
+        storedLength == sizeof(LegacyProfileConfigV3)) {
       if (profiles[index].buttonKeys[0] == 'z' &&
           profiles[index].buttonKeys[1] == 'x' &&
           profiles[index].buttonKeys[2] == 'c') {
@@ -89,7 +263,7 @@ void loadProfiles() {
         profiles[index].encoderPressKey = kEncoderPressDefault;
         profileChanged = true;
       }
-      if (storedConfigVersion < kProfileConfigVersion &&
+      if (storedConfigVersion < kKnobDefaultMigrationVersion &&
           profiles[index].buttonKeys[0] == 'z' &&
           profiles[index].buttonKeys[1] == 'x' &&
           profiles[index].buttonKeys[2] == 'y' &&
@@ -106,6 +280,53 @@ void loadProfiles() {
            profiles[index].encoderPressKey != kWindowsKeyAction &&
            profiles[index].encoderPressKey != kMuteAction)) {
         profiles[index].encoderPressKey = kEncoderPressDefault;
+        profileChanged = true;
+      }
+      for (size_t button = 0; button < kButtonCount; button++) {
+        if (profiles[index].buttonKeys[button] > 126 &&
+            profiles[index].buttonKeys[button] != kWindowsKeyAction) {
+          profiles[index].buttonKeys[button] = kNoAction;
+          profileChanged = true;
+        }
+      }
+      for (size_t button = 0; button < kButtonCount - 1; button++) {
+        if ((profiles[index].fnButtonKeys[button] < 0 &&
+             !isShortcutAction(profiles[index].fnButtonKeys[button])) ||
+            (profiles[index].fnButtonKeys[button] > 126 &&
+             profiles[index].fnButtonKeys[button] != kWindowsKeyAction)) {
+          profiles[index].fnButtonKeys[button] = kNoAction;
+          profileChanged = true;
+        }
+      }
+      if ((profiles[index].fnClockwiseAction < 0 &&
+           profiles[index].fnClockwiseAction != kStartMenuAction &&
+           profiles[index].fnClockwiseAction != kVolumeUpAction &&
+           profiles[index].fnClockwiseAction != kVolumeDownAction &&
+           profiles[index].fnClockwiseAction != kMuteAction &&
+           !isShortcutAction(profiles[index].fnClockwiseAction)) ||
+          (profiles[index].fnClockwiseAction > 126 &&
+           profiles[index].fnClockwiseAction != kWindowsKeyAction)) {
+        profiles[index].fnClockwiseAction = kNoAction;
+        profileChanged = true;
+      }
+      if ((profiles[index].fnCounterClockwiseAction < 0 &&
+           profiles[index].fnCounterClockwiseAction != kStartMenuAction &&
+           profiles[index].fnCounterClockwiseAction != kVolumeUpAction &&
+           profiles[index].fnCounterClockwiseAction != kVolumeDownAction &&
+           profiles[index].fnCounterClockwiseAction != kMuteAction &&
+           !isShortcutAction(profiles[index].fnCounterClockwiseAction)) ||
+          (profiles[index].fnCounterClockwiseAction > 126 &&
+           profiles[index].fnCounterClockwiseAction != kWindowsKeyAction)) {
+        profiles[index].fnCounterClockwiseAction = kNoAction;
+        profileChanged = true;
+      }
+      if ((profiles[index].fnEncoderPressKey < 0 &&
+           !isShortcutAction(profiles[index].fnEncoderPressKey)) ||
+          (profiles[index].fnEncoderPressKey > 126 &&
+           profiles[index].fnEncoderPressKey != kWindowsKeyAction &&
+           profiles[index].fnEncoderPressKey != kMuteAction &&
+           !isShortcutAction(profiles[index].fnEncoderPressKey))) {
+        profiles[index].fnEncoderPressKey = kNoAction;
         profileChanged = true;
       }
       if (profileChanged) {
@@ -186,11 +407,8 @@ void updateButton(ButtonState &button, uint8_t pin, int16_t key,
   Serial.printf("BUTTON|%s(GPIO%u)=%s\n", name, pin,
                 pressed ? "PRESSED" : "RELEASED");
   if (pressed) {
-    if (tapOnPress && key == kMuteAction) {
-      if (hidMounted) {
-        consumerControl.press(CONSUMER_CONTROL_MUTE);
-        consumerControl.release();
-      }
+    if (tapOnPress || isShortcutAction(key)) {
+      sendTapAction(key);
       button.pressedKey = kNoAction;
       return;
     }
@@ -216,18 +434,39 @@ void updateButton(ButtonState &button, uint8_t pin, int16_t key,
 }
 
 void updateButtons(uint32_t now) {
-  for (size_t index = 0; index < kButtonCount; index++) {
+  const bool fnWasPressed = buttons[0].stablePressed;
+  updateButton(buttons[0], kButtonPins[0], kNoAction, kButtonNames[0], now);
+  const bool fnPressed = buttons[0].stablePressed;
+  if (!fnWasPressed && fnPressed) {
+    fnButtonPressMs = now;
+    fnLayerActive = false;
+  } else if (fnPressed && !fnLayerActive &&
+             now - fnButtonPressMs >= kFnHoldThresholdMs) {
+    fnLayerActive = true;
+  } else if (fnWasPressed && !fnPressed) {
+    if (!fnLayerActive) {
+      sendTapAction(currentProfile().buttonKeys[0]);
+    }
+    fnLayerActive = false;
+  }
+
+  for (size_t index = 1; index < kButtonCount; index++) {
     updateButton(buttons[index], kButtonPins[index],
-                 currentProfile().buttonKeys[index], kButtonNames[index], now);
+                 currentProfile().buttonKeys[index],
+                 kButtonNames[index], now);
   }
 }
 
 void sendEncoderAction(int16_t action, const char *direction) {
+  Serial.printf("ENCODER|%s\n", direction);
   if (action == kNoAction) {
     return;
   }
-  Serial.printf("ENCODER|%s\n", direction);
   if (!hidMounted) {
+    return;
+  }
+  if (isShortcutAction(action)) {
+    sendShortcut(action);
     return;
   }
   switch (action) {
@@ -269,10 +508,16 @@ void updateEncoderRotation() {
   } else {
     encoderDelta += movement;
     if (encoderDelta >= 4) {
-      sendEncoderAction(currentProfile().clockwiseAction, "CW");
+      sendEncoderAction(fnLayerActive
+                            ? currentProfile().fnClockwiseAction
+                            : currentProfile().clockwiseAction,
+                        "CW");
       encoderDelta = 0;
     } else if (encoderDelta <= -4) {
-      sendEncoderAction(currentProfile().counterClockwiseAction, "CCW");
+      sendEncoderAction(fnLayerActive
+                            ? currentProfile().fnCounterClockwiseAction
+                            : currentProfile().counterClockwiseAction,
+                        "CCW");
       encoderDelta = 0;
     }
   }
@@ -280,16 +525,22 @@ void updateEncoderRotation() {
 }
 
 void updateEncoderSwitch(uint32_t now) {
+  const int16_t action =
+      fnLayerActive ? currentProfile().fnEncoderPressKey
+                    : currentProfile().encoderPressKey;
   updateButton(encoderButton, kEncoderSwitchPin,
-               currentProfile().encoderPressKey, "ENC_SW", now, true);
+               action, "ENC_SW", now, true);
 }
 
 void sendConfiguration() {
   const ProfileConfig &config = currentProfile();
-  Serial.printf("CFG|%u|%u|%u|%u|%d|%d|%d\n", activeProfile,
+  Serial.printf("CFG|%u|%u|%u|%u|%d|%d|%d|%d|%d|%d|%d|%d\n", activeProfile,
                 config.buttonKeys[0], config.buttonKeys[1],
                 config.buttonKeys[2], config.clockwiseAction,
-                config.counterClockwiseAction, config.encoderPressKey);
+                config.counterClockwiseAction, config.encoderPressKey,
+                config.fnButtonKeys[0], config.fnButtonKeys[1],
+                config.fnClockwiseAction, config.fnCounterClockwiseAction,
+                config.fnEncoderPressKey);
 }
 
 void handleCommand(char *command) {
@@ -313,8 +564,13 @@ void handleCommand(char *command) {
     const int value = atoi(valueText);
     ProfileConfig &config = currentProfile();
     if (field >= 0 && field < static_cast<int>(kButtonCount) &&
-        (value == kNoAction || (value >= 32 && value <= 126))) {
+        (value == kNoAction || (value >= 32 && value <= 126) ||
+         value == kWindowsKeyAction)) {
       config.buttonKeys[field] = static_cast<uint8_t>(value);
+    } else if (field >= 6 && field <= 7 &&
+               (value == kNoAction || (value >= 32 && value <= 126) ||
+                value == kWindowsKeyAction || isShortcutAction(value))) {
+      config.fnButtonKeys[field - 6] = static_cast<int16_t>(value);
     } else if ((field == 3 || field == 4) &&
                (value == kNoAction ||
                 (value >= 32 && value <= 126) ||
@@ -322,16 +578,34 @@ void handleCommand(char *command) {
                 value == kStartMenuAction ||
                 value == kVolumeUpAction ||
                 value == kVolumeDownAction ||
-                value == kMuteAction)) {
+                value == kMuteAction || isShortcutAction(value))) {
       if (field == 3) {
         config.clockwiseAction = value;
       } else {
         config.counterClockwiseAction = value;
       }
-    } else if (field == 5 &&
+    } else if ((field == 8 || field == 9) &&
+               (value == kNoAction ||
+                (value >= 32 && value <= 126) ||
+                value == kWindowsKeyAction ||
+                value == kStartMenuAction ||
+                value == kVolumeUpAction ||
+                value == kVolumeDownAction ||
+                value == kMuteAction || isShortcutAction(value))) {
+      if (field == 8) {
+        config.fnClockwiseAction = value;
+      } else {
+        config.fnCounterClockwiseAction = value;
+      }
+    } else if ((field == 5 || field == 10) &&
                ((value >= 0 && value <= 126) ||
-                value == kWindowsKeyAction || value == kMuteAction)) {
-      config.encoderPressKey = static_cast<int16_t>(value);
+                value == kWindowsKeyAction || value == kMuteAction ||
+                (field == 10 && isShortcutAction(value)))) {
+      if (field == 5) {
+        config.encoderPressKey = static_cast<int16_t>(value);
+      } else {
+        config.fnEncoderPressKey = static_cast<int16_t>(value);
+      }
     }
     sendConfiguration();
     return;

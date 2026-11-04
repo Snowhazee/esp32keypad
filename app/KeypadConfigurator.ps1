@@ -1,4 +1,4 @@
-Add-Type -AssemblyName System.Windows.Forms
+﻿Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName System.IO.Ports
 
@@ -15,22 +15,36 @@ $script:awaitingConfiguration = $false
 $script:lastConfigurationRequest = [datetime]::MinValue
 $script:awaitingSave = $false
 $script:saveDeadline = [datetime]::MinValue
+$script:fnPanelExpanded = $false
 
 $form = New-Object System.Windows.Forms.Form
 $form.Text = 'ESP32 Keypad'
 $form.StartPosition = 'CenterScreen'
-$form.ClientSize = New-Object System.Drawing.Size(640, 570)
-$form.MinimumSize = New-Object System.Drawing.Size(656, 609)
+$form.ClientSize = New-Object System.Drawing.Size(780, 650)
+$form.MinimumSize = New-Object System.Drawing.Size(796, 689)
 $form.Font = New-Object System.Drawing.Font('Segoe UI', 9)
+$form.BackColor = [System.Drawing.Color]::FromArgb(17, 24, 39)
+$form.ForeColor = [System.Drawing.Color]::FromArgb(226, 232, 240)
 
 $layout = New-Object System.Windows.Forms.TableLayoutPanel
 $layout.Dock = 'Fill'
 $layout.Padding = New-Object System.Windows.Forms.Padding(16)
+$layout.BackColor = $form.BackColor
 $layout.ColumnCount = 3
-$layout.RowCount = 8
+$layout.RowCount = 12
 $layout.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Absolute', 150)))
 $layout.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Percent', 100)))
-$layout.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Absolute', 88)))
+$layout.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Absolute', 110)))
+$layout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Absolute', 40)))
+$layout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Absolute', 40)))
+$layout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Absolute', 30)))
+for ($row = 0; $row -lt 5; $row++) {
+    $layout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Absolute', 40)))
+}
+$layout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Absolute', 30)))
+$layout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Absolute', 0)))
+$layout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Absolute', 30)))
+$layout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Absolute', 84)))
 $form.Controls.Add($layout)
 
 function Add-Label($text, $row) {
@@ -38,6 +52,7 @@ function Add-Label($text, $row) {
     $label.Text = $text
     $label.Dock = 'Fill'
     $label.TextAlign = 'MiddleLeft'
+    $label.ForeColor = [System.Drawing.Color]::FromArgb(148, 163, 184)
     $layout.Controls.Add($label, 0, $row)
 }
 
@@ -46,6 +61,9 @@ function Add-Combo($row) {
     $combo.Dock = 'Fill'
     $combo.DropDownStyle = 'DropDownList'
     $combo.Margin = New-Object System.Windows.Forms.Padding(3, 6, 12, 6)
+    $combo.BackColor = [System.Drawing.Color]::FromArgb(31, 41, 55)
+    $combo.ForeColor = [System.Drawing.Color]::FromArgb(241, 245, 249)
+    $combo.FlatStyle = 'Flat'
     $layout.Controls.Add($combo, 1, $row)
     return $combo
 }
@@ -54,6 +72,9 @@ $portCombo = Add-Combo 0
 $scanButton = New-Object System.Windows.Forms.Button
 $scanButton.Text = 'Refresh'
 $scanButton.Dock = 'Fill'
+$scanButton.FlatStyle = 'Flat'
+$scanButton.BackColor = [System.Drawing.Color]::FromArgb(31, 41, 55)
+$scanButton.ForeColor = [System.Drawing.Color]::FromArgb(226, 232, 240)
 $layout.Controls.Add($scanButton, 2, 0)
 
 $profileCombo = Add-Combo 1
@@ -62,12 +83,16 @@ $profileCombo.SelectedIndex = 0
 $connectButton = New-Object System.Windows.Forms.Button
 $connectButton.Text = 'Connect'
 $connectButton.Dock = 'Fill'
+$connectButton.FlatStyle = 'Flat'
+$connectButton.BackColor = [System.Drawing.Color]::FromArgb(13, 148, 136)
+$connectButton.ForeColor = [System.Drawing.Color]::White
 $layout.Controls.Add($connectButton, 2, 1)
 
 $separator = New-Object System.Windows.Forms.Label
 $separator.Text = 'KEY MAPPING'
 $separator.Font = New-Object System.Drawing.Font('Segoe UI Semibold', 9)
 $separator.Dock = 'Fill'
+$separator.ForeColor = [System.Drawing.Color]::FromArgb(45, 212, 191)
 $layout.Controls.Add($separator, 0, 2)
 $layout.SetColumnSpan($separator, 3)
 
@@ -83,11 +108,118 @@ $rotationCombos += Add-Combo 6
 Add-Label 'Knob counter-clockwise' 7
 $rotationCombos += Add-Combo 7
 
+$fnToggleButton = New-Object System.Windows.Forms.Button
+$fnToggleButton.Text = 'FN LAYER - Show'
+$fnToggleButton.Dock = 'Fill'
+$fnToggleButton.TextAlign = 'MiddleLeft'
+$fnToggleButton.FlatStyle = 'Flat'
+$fnToggleButton.BackColor = [System.Drawing.Color]::FromArgb(31, 41, 55)
+$fnToggleButton.ForeColor = [System.Drawing.Color]::FromArgb(45, 212, 191)
+$layout.Controls.Add($fnToggleButton, 0, 8)
+$fnHintLabel = New-Object System.Windows.Forms.Label
+$fnHintLabel.Text = 'Hold K1 for 150 ms, then use the knob'
+$fnHintLabel.Dock = 'Fill'
+$fnHintLabel.TextAlign = 'MiddleLeft'
+$fnHintLabel.ForeColor = [System.Drawing.Color]::FromArgb(148, 163, 184)
+$layout.Controls.Add($fnHintLabel, 1, 8)
+$layout.SetColumnSpan($fnHintLabel, 2)
+
+$fnPanel = New-Object System.Windows.Forms.TableLayoutPanel
+$fnPanel.Dock = 'Fill'
+$fnPanel.ColumnCount = 2
+$fnPanel.RowCount = 3
+$fnPanel.BackColor = $form.BackColor
+$fnPanel.Padding = New-Object System.Windows.Forms.Padding(0, 2, 0, 2)
+$fnPanel.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Absolute', 150)))
+$fnPanel.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Percent', 100)))
+for ($row = 0; $row -lt 3; $row++) {
+    $fnPanel.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Absolute', 32)))
+}
+$layout.Controls.Add($fnPanel, 0, 9)
+$layout.SetColumnSpan($fnPanel, 3)
+
+$fnLabels = @('FN + Knob CW', 'FN + Knob CCW', 'FN + Knob press')
+$fnCombos = @()
+for ($row = 0; $row -lt 3; $row++) {
+    $label = New-Object System.Windows.Forms.Label
+    $label.Text = $fnLabels[$row]
+    $label.Dock = 'Fill'
+    $label.TextAlign = 'MiddleLeft'
+    $label.ForeColor = [System.Drawing.Color]::FromArgb(148, 163, 184)
+    $fnPanel.Controls.Add($label, 0, $row)
+    $combo = New-Object System.Windows.Forms.ComboBox
+    $combo.Dock = 'Fill'
+    $combo.DropDownStyle = 'DropDownList'
+    $combo.Margin = New-Object System.Windows.Forms.Padding(3, 3, 12, 3)
+    $combo.BackColor = [System.Drawing.Color]::FromArgb(31, 41, 55)
+    $combo.ForeColor = [System.Drawing.Color]::FromArgb(241, 245, 249)
+    $combo.FlatStyle = 'Flat'
+    $fnPanel.Controls.Add($combo, 1, $row)
+    $fnCombos += $combo
+}
+$fnPanel.Visible = $false
+
+$feedbackHeader = New-Object System.Windows.Forms.Label
+$feedbackHeader.Text = 'LIVE INPUT - Waiting for device'
+$feedbackHeader.Font = New-Object System.Drawing.Font('Segoe UI Semibold', 9)
+$feedbackHeader.Dock = 'Fill'
+$feedbackHeader.ForeColor = [System.Drawing.Color]::FromArgb(45, 212, 191)
+$layout.Controls.Add($feedbackHeader, 0, 10)
+$layout.SetColumnSpan($feedbackHeader, 3)
+
+$feedbackPanel = New-Object System.Windows.Forms.FlowLayoutPanel
+$feedbackPanel.Dock = 'Fill'
+$feedbackPanel.WrapContents = $false
+$feedbackPanel.BackColor = $form.BackColor
+$feedbackPanel.Margin = New-Object System.Windows.Forms.Padding(0)
+$feedbackPanel.Padding = New-Object System.Windows.Forms.Padding(0, 2, 0, 2)
+$layout.Controls.Add($feedbackPanel, 0, 11)
+$layout.SetColumnSpan($feedbackPanel, 3)
+
+$script:feedbackCards = @{}
+$feedbackNames = @(
+    @{ Id = 'K1'; Title = 'K1' },
+    @{ Id = 'K2'; Title = 'K2' },
+    @{ Id = 'K3'; Title = 'K3' },
+    @{ Id = 'CW'; Title = 'CW' },
+    @{ Id = 'CCW'; Title = 'CCW' },
+    @{ Id = 'SW'; Title = 'KNOB' }
+)
+foreach ($feedback in $feedbackNames) {
+    $card = New-Object System.Windows.Forms.Panel
+    $card.Width = 112
+    $card.Height = 66
+    $card.Margin = New-Object System.Windows.Forms.Padding(0, 0, 8, 0)
+    $card.BackColor = [System.Drawing.Color]::FromArgb(31, 41, 55)
+    $title = New-Object System.Windows.Forms.Label
+    $title.Text = $feedback.Title
+    $title.Location = New-Object System.Drawing.Point(9, 7)
+    $title.Size = New-Object System.Drawing.Size(98, 23)
+    $title.Font = New-Object System.Drawing.Font('Segoe UI Semibold', 9)
+    $title.ForeColor = [System.Drawing.Color]::FromArgb(148, 163, 184)
+    $card.Controls.Add($title)
+    $state = New-Object System.Windows.Forms.Label
+    $state.Text = 'READY'
+    $state.Location = New-Object System.Drawing.Point(9, 34)
+    $state.Size = New-Object System.Drawing.Size(98, 20)
+    $state.Font = New-Object System.Drawing.Font('Segoe UI', 8)
+    $state.ForeColor = [System.Drawing.Color]::FromArgb(148, 163, 184)
+    $card.Controls.Add($state)
+    $feedbackPanel.Controls.Add($card)
+    $script:feedbackCards[$feedback.Id] = @{
+        Panel = $card
+        Title = $title
+        State = $state
+        PulseUntil = [datetime]::MinValue
+    }
+}
+
 $bottom = New-Object System.Windows.Forms.FlowLayoutPanel
 $bottom.Dock = 'Bottom'
-$bottom.Height = 86
+$bottom.Height = 78
 $bottom.Padding = New-Object System.Windows.Forms.Padding(16, 8, 16, 8)
 $bottom.WrapContents = $true
+$bottom.BackColor = [System.Drawing.Color]::FromArgb(15, 23, 42)
 $form.Controls.Add($bottom)
 
 $encoderPressLabel = New-Object System.Windows.Forms.Label
@@ -95,16 +227,23 @@ $encoderPressLabel.Text = 'Encoder press'
 $encoderPressLabel.Width = 104
 $encoderPressLabel.Height = 30
 $encoderPressLabel.TextAlign = 'MiddleLeft'
+$encoderPressLabel.ForeColor = [System.Drawing.Color]::FromArgb(148, 163, 184)
 $bottom.Controls.Add($encoderPressLabel)
 $encoderPressCombo = New-Object System.Windows.Forms.ComboBox
 $encoderPressCombo.Width = 110
 $encoderPressCombo.DropDownStyle = 'DropDownList'
+$encoderPressCombo.BackColor = [System.Drawing.Color]::FromArgb(31, 41, 55)
+$encoderPressCombo.ForeColor = [System.Drawing.Color]::FromArgb(241, 245, 249)
+$encoderPressCombo.FlatStyle = 'Flat'
 $bottom.Controls.Add($encoderPressCombo)
 
 $resetProfileButton = New-Object System.Windows.Forms.Button
 $resetProfileButton.Text = 'Reset profile'
 $resetProfileButton.Width = 105
 $resetProfileButton.Height = 30
+$resetProfileButton.FlatStyle = 'Flat'
+$resetProfileButton.BackColor = [System.Drawing.Color]::FromArgb(31, 41, 55)
+$resetProfileButton.ForeColor = [System.Drawing.Color]::FromArgb(226, 232, 240)
 $resetProfileButton.Enabled = $false
 $bottom.Controls.Add($resetProfileButton)
 
@@ -112,19 +251,25 @@ $saveButton = New-Object System.Windows.Forms.Button
 $saveButton.Text = 'Save to keypad'
 $saveButton.Width = 118
 $saveButton.Height = 30
+$saveButton.FlatStyle = 'Flat'
+$saveButton.BackColor = [System.Drawing.Color]::FromArgb(13, 148, 136)
+$saveButton.ForeColor = [System.Drawing.Color]::White
 $saveButton.Enabled = $false
 $bottom.Controls.Add($saveButton)
 $updateButton = New-Object System.Windows.Forms.Button
 $updateButton.Text = 'Update firmware...'
 $updateButton.Width = 130
 $updateButton.Height = 30
+$updateButton.FlatStyle = 'Flat'
+$updateButton.BackColor = [System.Drawing.Color]::FromArgb(31, 41, 55)
+$updateButton.ForeColor = [System.Drawing.Color]::FromArgb(226, 232, 240)
 $bottom.Controls.Add($updateButton)
 $statusLabel = New-Object System.Windows.Forms.Label
 $statusLabel.Text = 'Not connected'
 $statusLabel.Width = 390
 $statusLabel.Height = 24
+$statusLabel.ForeColor = [System.Drawing.Color]::FromArgb(148, 163, 184)
 $bottom.Controls.Add($statusLabel)
-
 $keyOptions = @('None')
 foreach ($code in 97..122) {
     $character = [char]$code
@@ -135,9 +280,11 @@ foreach ($code in 48..57) {
     $keyOptions += [string]$character
 }
 $keyOptions += 'Space'
-$encoderPressOptions = @($keyOptions) + 'Windows key' + 'Mute'
-$rotationOptions = @($keyOptions) + 'Windows key' + 'Volume up' + 'Volume down' + 'Mute'
-
+$keyOptions += 'Windows key'
+$encoderPressOptions = @($keyOptions) + 'Mute'
+$rotationOptions = @($keyOptions) + 'Volume up' + 'Volume down' + 'Mute'
+$fnRotationOptions = @($rotationOptions) + @('Win + Space', 'Alt + Tab', 'Alt + F4')
+$fnEncoderPressOptions = @($encoderPressOptions) + @('Win + Space', 'Alt + Tab', 'Alt + F4')
 foreach ($combo in $buttonCombos) {
     [void]$combo.Items.AddRange([object[]]$keyOptions)
 }
@@ -145,6 +292,9 @@ foreach ($combo in $rotationCombos) {
     [void]$combo.Items.AddRange([object[]]$rotationOptions)
 }
 [void]$encoderPressCombo.Items.AddRange([object[]]$encoderPressOptions)
+[void]$fnCombos[0].Items.AddRange([object[]]$fnRotationOptions)
+[void]$fnCombos[1].Items.AddRange([object[]]$fnRotationOptions)
+[void]$fnCombos[2].Items.AddRange([object[]]$fnEncoderPressOptions)
 
 for ($index = 0; $index -lt $buttonCombos.Count; $index++) {
     $combo = $buttonCombos[$index]
@@ -157,6 +307,9 @@ for ($index = 0; $index -lt $rotationCombos.Count; $index++) {
     $rotationCombos[$index].AccessibleName = "Knob rotation $(@('clockwise', 'counter-clockwise')[$index]) key"
     $rotationCombos[$index].DropDownStyle = 'DropDownList'
 }
+$fnCombos[0].AccessibleName = 'FN knob rotation clockwise key'
+$fnCombos[1].AccessibleName = 'FN knob rotation counter-clockwise key'
+$fnCombos[2].AccessibleName = 'FN encoder press key'
 
 function Set-ComboValue($combo, [int]$value) {
     if ($value -eq -1) {
@@ -175,13 +328,27 @@ function Set-ComboValue($combo, [int]$value) {
         $combo.SelectedIndex = 37
     } elseif ($value -eq 131 -and $combo.Items.Count -gt 38) {
         $combo.SelectedIndex = 38
-    } elseif ($combo.AccessibleName -eq 'Encoder press key' -and $value -eq -4) {
-        $combo.SelectedIndex = 39
-    } elseif ($combo.AccessibleName -like 'Knob rotation*' -and $value -eq -2) {
-        $combo.SelectedIndex = 39
-    } elseif ($combo.AccessibleName -like 'Knob rotation*' -and $value -eq -3) {
+    } elseif ($combo.AccessibleName -like 'FN knob rotation*' -and $value -eq -5) {
+        $combo.SelectedIndex = 42
+    } elseif ($combo.AccessibleName -like 'FN encoder press*' -and $value -eq -5) {
         $combo.SelectedIndex = 40
-    } elseif ($combo.AccessibleName -like 'Knob rotation*' -and $value -eq -4) {
+    } elseif ($combo.AccessibleName -like 'FN *' -and $value -eq -6) {
+        $combo.SelectedIndex = switch -Wildcard ($combo.AccessibleName) {
+            'FN knob rotation*' { 43 }
+            'FN encoder press*' { 41 }
+        }
+    } elseif ($combo.AccessibleName -like 'FN *' -and $value -eq -7) {
+        $combo.SelectedIndex = switch -Wildcard ($combo.AccessibleName) {
+            'FN knob rotation*' { 44 }
+            'FN encoder press*' { 42 }
+        }
+    } elseif ($combo.AccessibleName -like '*encoder press key' -and $value -eq -4) {
+        $combo.SelectedIndex = 39
+    } elseif ($combo.AccessibleName -like '*rotation*' -and $value -eq -2) {
+        $combo.SelectedIndex = 39
+    } elseif ($combo.AccessibleName -like '*rotation*' -and $value -eq -3) {
+        $combo.SelectedIndex = 40
+    } elseif ($combo.AccessibleName -like '*rotation*' -and $value -eq -4) {
         $combo.SelectedIndex = 41
     } else {
         $combo.SelectedIndex = 0
@@ -202,14 +369,28 @@ function Get-ComboValue($combo, [bool]$allowWindowsKey = $false) {
     if ($index -eq 37) {
         return 32
     }
+    if ($index -eq 38) {
+        return 131
+    }
     if ($allowWindowsKey) {
-        if ($index -eq 38) {
-            return 131
+        if ($combo.AccessibleName -like 'FN knob rotation*') {
+            switch ($index) {
+                42 { return -5 }
+                43 { return -6 }
+                44 { return -7 }
+            }
         }
-        if ($combo.AccessibleName -eq 'Encoder press key' -and $index -eq 39) {
+        if ($combo.AccessibleName -like 'FN encoder press*') {
+            switch ($index) {
+                40 { return -5 }
+                41 { return -6 }
+                42 { return -7 }
+            }
+        }
+        if ($combo.AccessibleName -like '*encoder press key' -and $index -eq 39) {
             return -4
         }
-        if ($combo.AccessibleName -like 'Knob rotation*') {
+        if ($combo.AccessibleName -like '*rotation*') {
             switch ($index) {
                 39 { return -2 }
                 40 { return -3 }
@@ -277,7 +458,7 @@ function Try-NextAutoDetectPort {
               $script:autoDetectDeadline = [datetime]::Now.AddSeconds(5)
               $script:awaitingConfiguration = $true
               $script:lastConfigurationRequest = [datetime]::Now
-              $statusLabel.Text = "Checking $portName for keypad..."
+              $statusLabel.Text = "Checking $portName..."
               Send-Command 'GET'
               return
           } catch {
@@ -290,11 +471,12 @@ function Try-NextAutoDetectPort {
       $connectButton.Enabled = $true
       $scanButton.Enabled = $true
       $statusLabel.Text = 'Keypad not found. Check the USB cable, then select a port and connect.'
+      Set-FeedbackConnected $false
 }
 
 function Apply-Configuration([string]$line) {
       $parts = $line.Split('|')
-      if ($parts.Count -ne 8 -or $parts[0] -ne 'CFG') {
+      if ($parts.Count -ne 13 -or $parts[0] -ne 'CFG') {
           return $false
       }
       $script:updatingControls = $true
@@ -306,17 +488,86 @@ function Apply-Configuration([string]$line) {
           Set-ComboValue $rotationCombos[0] ([int]$parts[5])
           Set-ComboValue $rotationCombos[1] ([int]$parts[6])
           Set-ComboValue $encoderPressCombo ([int]$parts[7])
+          Set-ComboValue $fnCombos[0] ([int]$parts[10])
+          Set-ComboValue $fnCombos[1] ([int]$parts[11])
+          Set-ComboValue $fnCombos[2] ([int]$parts[12])
           $script:awaitingConfiguration = $false
           if (-not $script:awaitingSave) {
               $saveButton.Enabled = $true
               $resetProfileButton.Enabled = $true
               $statusLabel.Text = "Connected to $($portCombo.SelectedItem) - Profile $([int]$parts[1] + 1)"
           }
+          Set-FeedbackConnected $true
     } finally {
         $script:updatingControls = $false
     }
     return $true
 }
+
+function Set-FeedbackCard([string]$id, [bool]$active, [string]$state, [bool]$pulse = $false) {
+    $card = $script:feedbackCards[$id]
+    if ($active) {
+        $card.Panel.BackColor = [System.Drawing.Color]::FromArgb(13, 148, 136)
+        $card.Title.ForeColor = [System.Drawing.Color]::White
+        $card.State.ForeColor = [System.Drawing.Color]::FromArgb(204, 251, 241)
+        $card.State.Text = $state
+        if ($pulse) {
+            $card.PulseUntil = [datetime]::Now.AddMilliseconds(450)
+        } else {
+            $card.PulseUntil = [datetime]::MinValue
+        }
+        return
+    }
+
+    $card.Panel.BackColor = [System.Drawing.Color]::FromArgb(31, 41, 55)
+    $card.Title.ForeColor = [System.Drawing.Color]::FromArgb(148, 163, 184)
+    $card.State.ForeColor = [System.Drawing.Color]::FromArgb(148, 163, 184)
+    $card.State.Text = $state
+    $card.PulseUntil = [datetime]::MinValue
+}
+
+function Set-FeedbackConnected([bool]$connected) {
+    if ($connected) {
+        $feedbackHeader.Text = 'LIVE INPUT - Device connected'
+        foreach ($id in $script:feedbackCards.Keys) {
+            if ($script:feedbackCards[$id].State.Text -eq 'OFFLINE') {
+                Set-FeedbackCard $id $false 'READY'
+            }
+        }
+        return
+    }
+
+    $feedbackHeader.Text = 'LIVE INPUT - Waiting for device'
+    foreach ($id in $script:feedbackCards.Keys) {
+        Set-FeedbackCard $id $false 'OFFLINE'
+    }
+}
+
+function Apply-DeviceEvent([string]$line) {
+    if ($line -match '^BUTTON\|(K[1-3]|ENC_SW)\(GPIO\d+\)=(PRESSED|RELEASED)$') {
+        $id = if ($matches[1] -eq 'ENC_SW') { 'SW' } else { $matches[1] }
+        $pressed = $matches[2] -eq 'PRESSED'
+        Set-FeedbackCard $id $pressed $(if ($pressed) { 'PRESSED' } else { 'READY' })
+        return
+    }
+    if ($line -match '^ENCODER\|(CW|CCW)$') {
+        Set-FeedbackCard $matches[1] $true 'DETECTED' $true
+    }
+}
+
+Set-FeedbackConnected $false
+
+$fnToggleButton.Add_Click({
+    $script:fnPanelExpanded = -not $script:fnPanelExpanded
+    $fnPanel.Visible = $script:fnPanelExpanded
+    $layout.RowStyles[9].Height = if ($script:fnPanelExpanded) { 104 } else { 0 }
+    $form.ClientSize = if ($script:fnPanelExpanded) {
+        New-Object System.Drawing.Size(780, 750)
+    } else {
+        New-Object System.Drawing.Size(780, 650)
+    }
+    $fnToggleButton.Text = if ($script:fnPanelExpanded) { 'FN LAYER - Hide' } else { 'FN LAYER - Show' }
+})
 
 function Start-AutoDetect {
     Refresh-Ports
@@ -341,6 +592,7 @@ $connectButton.Add_Click({
         Close-SerialPort
         $script:awaitingConfiguration = $false
         $script:awaitingSave = $false
+        Set-FeedbackConnected $false
         $saveButton.Enabled = $false
         $resetProfileButton.Enabled = $false
         $connectButton.Text = 'Connect'
@@ -360,13 +612,14 @@ $connectButton.Add_Click({
         $script:serialPort.NewLine = "`n"
         $script:serialPort.Open()
         $connectButton.Text = 'Disconnect'
+        Set-FeedbackConnected $false
         $script:receiveBuffer = ''
         $script:awaitingConfiguration = $true
         $script:autoDetectDeadline = [datetime]::Now.AddSeconds(5)
         $script:lastConfigurationRequest = [datetime]::Now
         $saveButton.Enabled = $false
         $resetProfileButton.Enabled = $false
-        $statusLabel.Text = "Checking $($portCombo.SelectedItem) for keypad..."
+        $statusLabel.Text = "Checking $($portCombo.SelectedItem)..."
         Send-Command 'GET'
     } catch {
         Close-SerialPort
@@ -396,6 +649,10 @@ $saveButton.Add_Click({
         $clockwiseValue = Get-ComboValue $rotationCombos[0] $true
         $counterClockwiseValue = Get-ComboValue $rotationCombos[1] $true
         $encoderPressValue = Get-ComboValue $encoderPressCombo $true
+        $fnValues = @()
+        $fnValues += Get-ComboValue $fnCombos[0] $true
+        $fnValues += Get-ComboValue $fnCombos[1] $true
+        $fnValues += Get-ComboValue $fnCombos[2] $true
     } catch {
         [System.Windows.Forms.MessageBox]::Show($_.Exception.Message, 'Invalid key selection')
         return
@@ -407,6 +664,9 @@ $saveButton.Add_Click({
     Send-Command "SET|3|$clockwiseValue"
     Send-Command "SET|4|$counterClockwiseValue"
     Send-Command "SET|5|$encoderPressValue"
+    for ($index = 0; $index -lt $fnValues.Count; $index++) {
+        Send-Command "SET|$($index + 8)|$($fnValues[$index])"
+    }
     Send-Command 'SAVE'
     $script:awaitingSave = $true
     $script:saveDeadline = [datetime]::Now.AddSeconds(2)
@@ -439,6 +699,9 @@ $resetProfileButton.Add_Click({
         Set-ComboValue $rotationCombos[0] -2
         Set-ComboValue $rotationCombos[1] -3
         Set-ComboValue $encoderPressCombo -4
+        foreach ($combo in $fnCombos) {
+            Set-ComboValue $combo 0
+        }
     } finally {
         $script:updatingControls = $false
     }
@@ -449,6 +712,9 @@ $resetProfileButton.Add_Click({
     Send-Command 'SET|3|-2'
     Send-Command 'SET|4|-3'
     Send-Command 'SET|5|-4'
+    for ($index = 8; $index -le 10; $index++) {
+        Send-Command "SET|$index|0"
+    }
     Send-Command 'SAVE'
     $script:awaitingSave = $true
     $script:saveDeadline = [datetime]::Now.AddSeconds(2)
@@ -469,6 +735,7 @@ $pollTimer.Add_Tick({
             while ($script:receiveBuffer.Contains("`n")) {
                 $line, $script:receiveBuffer = $script:receiveBuffer -split "`n", 2
                 $configurationReceived = Apply-Configuration $line.Trim()
+                Apply-DeviceEvent $line.Trim()
                 if ($configurationReceived -and $script:autoDetecting) {
                     $script:autoDetecting = $false
                     $portCombo.Enabled = $true
@@ -492,9 +759,10 @@ $pollTimer.Add_Tick({
             $script:awaitingConfiguration = $false
             Close-SerialPort
             $connectButton.Text = 'Connect'
+            Set-FeedbackConnected $false
             $saveButton.Enabled = $false
             $resetProfileButton.Enabled = $false
-            $statusLabel.Text = "No keypad response on $($portCombo.SelectedItem). Select the ESP32 serial port and connect."
+            $statusLabel.Text = "No keypad response on $($portCombo.SelectedItem). Select the ESP32 port and connect."
         }
         if ($script:awaitingConfiguration -and
             [datetime]::Now -ge $script:lastConfigurationRequest.AddMilliseconds(300)) {
@@ -507,9 +775,16 @@ $pollTimer.Add_Tick({
             $resetProfileButton.Enabled = $true
             $statusLabel.Text = "No save confirmation from $($portCombo.SelectedItem). Check the connection and try again."
         }
+        foreach ($id in @('CW', 'CCW')) {
+            if ($script:feedbackCards[$id].PulseUntil -ne [datetime]::MinValue -and
+                [datetime]::Now -ge $script:feedbackCards[$id].PulseUntil) {
+                Set-FeedbackCard $id $false 'READY'
+            }
+        }
     } catch {
         $statusLabel.Text = "Serial read failed: $($_.Exception.Message)"
         $script:awaitingConfiguration = $false
+        Set-FeedbackConnected $false
         Close-SerialPort
         $connectButton.Text = 'Connect'
         if ($script:autoDetecting) {
@@ -539,6 +814,7 @@ $updateButton.Add_Click({
     $script:serialPort.Dispose()
     $script:serialPort = $null
     $connectButton.Text = 'Connect'
+    Set-FeedbackConnected $false
     $pollTimer.Stop()
     $message = "The keypad must be in ESP32-S3 bootloader mode.`n`nHold BOOT, tap RESET, release BOOT, then choose Yes to flash. Keep the USB cable connected."
     $choice = [System.Windows.Forms.MessageBox]::Show($message, 'Ready to flash', 'YesNo', 'Information')
